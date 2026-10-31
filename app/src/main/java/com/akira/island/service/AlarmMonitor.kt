@@ -25,11 +25,15 @@ import com.akira.island.island.Ios
  */
 class AlarmMonitor(private val context: Context) {
     private val alarms = context.getSystemService(AlarmManager::class.java)
+    private var active = false
     private val receiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context, intent: Intent) = refresh(announce = true)
+        override fun onReceive(c: Context, intent: Intent) {
+            if (active) refresh(announce = true)
+        }
     }
 
     fun start() {
+        active = true
         ContextCompat.registerReceiver(
             context, receiver, IntentFilter(AlarmManager.ACTION_NEXT_ALARM_CLOCK_CHANGED), ContextCompat.RECEIVER_EXPORTED,
         )
@@ -37,6 +41,7 @@ class AlarmMonitor(private val context: Context) {
     }
 
     fun stop() {
+        active = false
         runCatching { context.unregisterReceiver(receiver) }
         IslandBus.nextAlarm.value = null
     }

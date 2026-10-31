@@ -30,6 +30,7 @@ import java.util.Locale
  * показывают входящий своим окном без обычного уведомления, и по нему звонок не увидеть.
  */
 class CallMonitor(private val context: Context, private val scope: CoroutineScope) {
+    private var active = false
     private var lastState: String? = null
     private var number: String? = null
     private var since = 0L
@@ -40,17 +41,20 @@ class CallMonitor(private val context: Context, private val scope: CoroutineScop
     }
 
     fun start() {
+        active = true
         ContextCompat.registerReceiver(
             context, receiver, IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED), ContextCompat.RECEIVER_EXPORTED,
         )
     }
 
     fun stop() {
+        active = false
         runCatching { context.unregisterReceiver(receiver) }
         remove()
     }
 
     private fun handle(intent: Intent) {
+        if (!active) return
         val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
         // Номер приходит только с разрешением «Журнал звонков», вторым таким же сообщением
         @Suppress("DEPRECATION")

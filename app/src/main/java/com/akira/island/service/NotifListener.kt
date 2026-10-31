@@ -15,6 +15,7 @@ import com.akira.island.core.ChronoInfo
 import com.akira.island.core.IslandBus
 import com.akira.island.core.LiveKind
 import com.akira.island.core.ProgressInfo
+import com.akira.island.core.ServiceDiagnostics
 import com.akira.island.data.SettingsRepo
 
 /**
@@ -23,40 +24,67 @@ import com.akira.island.data.SettingsRepo
  */
 class NotifListener : NotificationListenerService() {
     private var media: MediaMonitor? = null
+    private var connected = false
 
     override fun onListenerConnected() {
+        super.onListenerConnected()
+        stopMonitoring()
         SettingsRepo.init(this)
-        media = MediaMonitor(applicationContext).also { it.start() }
+        media = MediaMonitor(applicationContext)
+        media?.start()
+        connected = true
+        ServiceDiagnostics.update { copy(notificationConnected = true) }
         // Уже висящие уведомления разбираем без показа сообщений — они не новые
         runCatching { activeNotifications?.forEach { NotificationParser.onPosted(this, it, initial = true) } }
+        currentRanking?.let { MessageLockscreen.updateRankings(it, NotificationParser.notificationKeys()) }
     }
 
     override fun onListenerDisconnected() {
+        stopMonitoring()
+        super.onListenerDisconnected()
+    }
+
+    private fun stopMonitoring() {
+        connected = false
+        ServiceDiagnostics.update { copy(notificationConnected = false) }
         media?.stop()
         media = null
-        IslandBus.progress.value = emptyMap()
-        IslandBus.chrono.value = emptyMap()
-        IslandBus.calls.value = emptyMap()
-        IslandBus.live.value = emptyMap()
-        IslandBus.ringingAlarms.value = emptySet()
+        // Remove only listener-owned entries. Phone-state calls and screen-read clocks are independent.
+        NotificationParser.clear()
+    }
+
+    override fun onDestroy() {
+        stopMonitoring()
+        super.onDestroy()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        if (!connected) return
         NotificationParser.onPosted(this, sbn)
+        currentRanking?.let { MessageLockscreen.updateRankings(it, NotificationParser.notificationKeys()) }
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (!connected) return
         NotificationParser.onRemoved(sbn.key)
+    }
+
+    override fun onNotificationRankingUpdate(rankingMap: RankingMap) {
+        if (connected) MessageLockscreen.updateRankings(rankingMap, NotificationParser.notificationKeys())
     }
 }
 
 object NotificationParser {
     private val icons = HashMap<String, ImageBitmap?>()
+    private val keys = HashSet<String>()
+
+    fun notificationKeys(): Set<String> = keys.toSet()
 
     fun onPosted(context: Context, sbn: StatusBarNotification, initial: Boolean = false) {
         if (sbn.packageName == context.packageName) return
         val n = sbn.notification ?: return
         val ex = n.extras ?: return
+        keys += sbn.key
         val isMedia = n.category == Notification.CATEGORY_TRANSPORT || ex.containsKey(Notification.EXTRA_MEDIA_SESSION)
         val title = ex.getCharSequence(Notification.EXTRA_TITLE)?.toString()
             ?: appLabel(context, sbn.packageName)
@@ -101,7 +129,6 @@ object NotificationParser {
         // Неактивный (на паузе) таймер, который остров уже убрал, снова не показываем
         val chrono = call == null && !isMedia && (ticking || pausedMs != null) && !ClockControl.wasDismissed(sbn.key, pausedMs)
         if (clock && chrono) ClockControl.reader?.onNotificationChrono(sbn.packageName)
-        if (pausedMs != null && chrono) ClockControl.dropPausedLater(sbn.key)
         IslandBus.chrono.value = IslandBus.chrono.value.toMutableMap().apply {
             if (chrono) {
                 val down = if (pausedMs != null) looksLikeTimer(n, title) else ex.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN, false)
@@ -116,7 +143,6 @@ object NotificationParser {
                 remove(sbn.key)
             }
         }
-
         val live = if (call == null && !isMedia) LiveParser.parse(context, sbn, title) else null
         val liveWasKnown = sbn.key in IslandBus.live.value
         IslandBus.live.value = IslandBus.live.value.toMutableMap().apply {
@@ -131,6 +157,9 @@ object NotificationParser {
             IslandBus.progress.value = IslandBus.progress.value - sbn.key
             IslandBus.chrono.value = IslandBus.chrono.value - sbn.key
         }
+        // Schedule from the final representation, including notifications reclassified as live/media/call.
+        if (IslandBus.chrono.value[sbn.key]?.pausedMs != null) ClockControl.dropPausedLater(sbn.key)
+        else ClockControl.cancelPausedJob(sbn.key)
 
         val service = context as? NotificationListenerService
         if (!initial && service != null && !isMedia && call == null && !chrono && !hasProgress && live == null) {
@@ -165,9 +194,11 @@ object NotificationParser {
         } else {
             null
         }
-        val name = person?.name?.toString()?.takeIf { it.isNotBlank() } ?: title
+        val name = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            person?.name?.toString()?.takeIf { it.isNotBlank() } ?: title
+        } else title
         val avatar = runCatching {
-            val icon = person?.icon ?: n.getLargeIcon()
+            val icon = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) person?.icon ?: n.getLargeIcon() else n.getLargeIcon()
             icon?.loadDrawable(context)?.toBitmap(128, 128)?.asImageBitmap()
         }.getOrNull()
         return CallInfo(
@@ -199,6 +230,8 @@ object NotificationParser {
         runCatching { ex.getParcelable<PendingIntent>(key) }.getOrNull()
 
     fun onRemoved(key: String) {
+        keys -= key
+        MessageLockscreen.forget(key)
         Messages.forget(key)
         LiveParser.forget(key)
         ClockControl.forget(key)
@@ -208,6 +241,10 @@ object NotificationParser {
         if (key in IslandBus.chrono.value) IslandBus.chrono.value = IslandBus.chrono.value - key
         if (key in IslandBus.live.value) IslandBus.live.value = IslandBus.live.value - key
         if (key in IslandBus.ringingAlarms.value) IslandBus.ringingAlarms.value = IslandBus.ringingAlarms.value - key
+    }
+
+    fun clear() {
+        keys.toList().forEach(::onRemoved)
     }
 
     fun icon(context: Context, pkg: String): ImageBitmap? = icons.getOrPut(pkg) {

@@ -95,6 +95,7 @@ import com.akira.island.core.BatteryInfo
 import com.akira.island.core.ChronoInfo
 import com.akira.island.core.Controls
 import com.akira.island.core.IslandBus
+import com.akira.island.core.NotificationPrivacy
 import com.akira.island.core.Lyrics
 import com.akira.island.core.NoticeStyle
 import com.akira.island.core.Tints
@@ -148,6 +149,8 @@ fun IslandOverlay(
     val timer by IslandBus.timer.collectAsState()
     val stopwatch by IslandBus.stopwatch.collectAsState()
     val notice by IslandBus.notice.collectAsState()
+    val locked by IslandBus.locked.collectAsState()
+    val messageSystemPolicy by IslandBus.messageSystemPolicy.collectAsState()
     val battery by IslandBus.battery.collectAsState()
     val foreground by IslandBus.foregroundPackage.collectAsState()
     val expanded by IslandBus.expanded.collectAsState()
@@ -156,12 +159,15 @@ fun IslandOverlay(
     val nextAlarm by IslandBus.nextAlarm.collectAsState()
     val egg by IslandBus.egg.collectAsState()
     val payReady by IslandBus.payReady.collectAsState()
+    val wallClockVersion by IslandBus.wallClockVersion.collectAsState()
     // Будильник появляется в острове за 12 часов и уходит, когда прозвенел: просыпаемся ровно в эти два момента,
     // а не каждые полминуты. Пока телефон спит, ожидание стоит — поэтому со включением экрана пересчитываем
     val screenOn by IslandBus.screenOn.collectAsState()
+    val keyguard by IslandBus.keyguard.collectAsState()
+    val messageLocked = NotificationPrivacy.isLocked(locked, keyguard, screenOn)
     var alarmNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(nextAlarm, screenOn) {
-        val at = nextAlarm?.triggerAt ?: return@LaunchedEffect
+    RenderingEffect(nextAlarm, wallClockVersion) {
+        val at = nextAlarm?.triggerAt ?: return@RenderingEffect
         while (true) {
             val now = System.currentTimeMillis()
             alarmNow = now
@@ -177,7 +183,7 @@ fun IslandOverlay(
     // Обратный отсчёт из чужого уведомления, дошедший до нуля, уходит через 3 секунды, а не висит «00:00».
     // Просыпаемся ровно к этому моменту; пока экран погашен, ожидание стоит — со включением пересчитываем
     var chronoNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(chrono, screenOn) {
+    RenderingEffect(chrono, wallClockVersion) {
         while (true) {
             val now = System.currentTimeMillis()
             chronoNow = now
@@ -188,13 +194,14 @@ fun IslandOverlay(
     }
     val chronoActive = chrono.values.filterNot { it.finished(chronoNow) }
 
-    // Пробная «живая активность» исчезает по времени, даже если таймер удаления не сработал (сон телефона)
-    val hasExpiring = live.values.any { it.expiresAt > 0 }
+    // Wait only for the next expiry, not every second. Resume with wall time after hiding/sleep.
+    val expiries = live.values.map { it.expiresAt }.filter { it > 0 }.distinct().sorted()
     var wallNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(hasExpiring) {
-        while (hasExpiring) {
+    RenderingEffect(expiries, wallClockVersion) {
+        while (true) {
             wallNow = System.currentTimeMillis()
-            delay(1000)
+            val next = expiries.firstOrNull { it > wallNow } ?: break
+            delay(next - wallNow)
         }
     }
     // Навигатор, у которого в уведомлении пусто, дополняется тем, что видно на его экране
@@ -205,59 +212,41 @@ fun IslandOverlay(
 
     val call = if (!s.cardCall) null else {
         val tel = calls[CallMonitor.KEY]
-        val fromApp = calls.filterKeys { it != CallMonitor.KEY }.values.maxByOrNull { it.postTime }
-        when {
-            fromApp == null -> tel
-            tel == null -> fromApp
-            // У звонилки богаче карточка (имя, фото, кнопки), а состояние надёжнее у телефона
-            else -> fromApp.copy(
-                incoming = tel.incoming,
-                base = if (!tel.incoming && fromApp.incoming) tel.base else fromApp.base,
-                avatar = fromApp.avatar ?: tel.avatar,
-            )
-        }
+        val fromApp = calls.filterKeys { it != CallMonitor.KEY }.values
+            .sortedWith(compareByDescending<com.akira.island.core.CallInfo> { it.postTime }
+                .thenBy { Act.CallA(it).instanceKey }).firstOrNull()
+        reconcileCall(tel, fromApp)
     }
     // Смахнутый входящий не показываем, пока звонит (сбрасывает служба, когда звонить перестали)
     val callHidden by IslandBus.callHidden.collectAsState()
     val acts = buildList {
-        // Входящий звонок важнее всего, как на iPhone
-        if (call != null && call.incoming && !callHidden) add(Act.CallA(call))
-        notice?.let { add(Act.NoticeA(it)) }
-
-        val persistent = mutableListOf<Act>()
-        val t = timer
-        if (t != null && t.ringing) persistent += Act.TimerA(t)
-        // Оплата телефоном — пока ждём терминал, она главнее остального
-        payReady?.let { persistent += Act.PayA(it) }
-        if (call != null && !call.incoming) persistent += Act.CallA(call)
-        if (torch.on && s.cardTorch) persistent += Act.TorchA(torch)
-        if (t != null && !t.ringing) persistent += Act.TimerA(t)
-        if (s.cardLive) liveActive.maxByOrNull { it.postTime }?.let { persistent += Act.LiveA(it) }
-        stopwatch?.let { persistent += Act.StopwatchA(it) }
-        if (s.cardTimer) chronoActive.maxByOrNull { it.postTime }?.let { persistent += Act.ChronoA(it) }
+        // Eligibility only; priority and focus are resolved centrally by selectActivities.
+        if (call != null && (!call.incoming || !callHidden)) add(Act.CallA(call))
+        notice?.takeIf { NotificationPrivacy.allowsNotice(it, s, messageLocked, messageSystemPolicy) }?.let { add(Act.NoticeA(it)) }
+        timer?.let { add(Act.TimerA(it)) }
+        payReady?.let { add(Act.PayA(it)) }
+        if (torch.on && s.cardTorch) add(Act.TorchA(torch))
+        if (s.cardLive) liveActive.forEach { add(Act.LiveA(it)) }
+        stopwatch?.let { add(Act.StopwatchA(it)) }
+        if (s.cardTimer) chronoActive.forEach { add(Act.ChronoA(it)) }
         val m = media
-        if (s.cardMedia && m != null && !(s.hideWhenPlayerOpen && foreground == m.pkg)) persistent += Act.MediaA(m)
-        if (s.cardProgress) progress.values.maxByOrNull { it.postTime }?.let { persistent += Act.ProgressA(it) }
-        if (s.cardCharging && battery.charging) persistent += Act.ChargingA(battery)
+        if (s.cardMedia && m != null && !(s.hideWhenPlayerOpen && foreground == m.pkg)) add(Act.MediaA(m))
+        if (s.cardProgress) progress.values.forEach { add(Act.ProgressA(it)) }
+        if (s.cardCharging && battery.charging) add(Act.ChargingA(battery))
         // Будильник — тише всех: показывается, только когда больше ничего нет, и не уходит в пузырь
         val alarm = nextAlarm
-        if (s.cardAlarm && alarm != null && alarm.triggerAt - alarmNow in 1..ALARM_LEAD_MS) persistent += Act.AlarmA(alarm)
-
-        // Выбранная активность выходит вперёд, но звонящий таймер всегда главный
-        val ringing = (persistent.firstOrNull() as? Act.TimerA)?.t?.ringing == true || call?.incoming == true
-        val i = persistent.indexOfFirst { it.id == focus }
-        if (i > 0 && !ringing) persistent.add(0, persistent.removeAt(i))
-        addAll(persistent)
+        if (s.cardAlarm && alarm != null && alarm.triggerAt - alarmNow in 1..ALARM_LEAD_MS) add(Act.AlarmA(alarm))
     }
+    val selection = selectActivities(acts, focus, expanded, s.bubble)
 
     // Пока двигают ползунок «Ширина с активностью», на острове пример: стрелка и метры
     val previewUntil by IslandBus.widthPreviewUntil.collectAsState()
     var previewNow by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(previewUntil) {
-        while (true) {
-            previewNow = android.os.SystemClock.elapsedRealtime()
-            if (previewNow >= previewUntil) break
-            delay(250)
+    RenderingEffect(previewUntil) {
+        previewNow = SystemClock.elapsedRealtime()
+        if (previewNow < previewUntil) {
+            delay(previewUntil - previewNow)
+            previewNow = SystemClock.elapsedRealtime()
         }
     }
     val previewing = previewNow < previewUntil
@@ -266,13 +255,11 @@ fun IslandOverlay(
     val primary = when {
         calibrating -> Act.Idle
         previewing -> Act.LiveA(WidthDemo)
-        else -> acts.firstOrNull() ?: Act.Idle
+        else -> selection.primary
     }
-    val incoming = (primary as? Act.CallA)?.c?.incoming == true
     // Вторая активность — кружком рядом, если его не выключили в «Поведении»
-    val secondary = if (!s.bubble || primary.transient || incoming || calibrating) null
-    else acts.drop(1).firstOrNull { !it.transient && it !is Act.AlarmA }
-    val showExpanded = expanded && !primary.transient && !incoming && !calibrating
+    val secondary = if (calibrating || previewing) null else selection.secondary
+    val showExpanded = selection.showExpanded && !calibrating && !previewing
     val h = s.height.dp
 
     // Пузырь уходит с анимацией, поэтому помним последнюю активность в нём
@@ -283,8 +270,9 @@ fun IslandOverlay(
     val slot = animateDpAsState(if (bubbleVisible) activeHeight(s) + 6.dp else 0.dp, islandSpec(s), label = "slot")
 
     // Раскрытая активность пропала (музыку закрыли, таймер отменили) — сворачиваемся, а не показываем часы
-    val focusGone = expanded && focus != null && focus != Act.Idle.id && acts.none { it.id == focus }
-    LaunchedEffect(focusGone) { if (focusGone) Controls.collapse() }
+    LaunchedEffect(selection.focusGone, focus) {
+        if (selection.focusGone && IslandBus.focus.value == focus) Controls.collapse()
+    }
 
     // «Сворачивать раскрытый остров»: если его столько секунд не трогают, он сворачивается сам
     LaunchedEffect(showExpanded, s.autoCollapseSec) {
@@ -620,7 +608,7 @@ private fun IslandBody(
                             !isExpanded && vertical && dy > threshold && settings.swipeExpand && !act.transient &&
                                 (act !is Act.Idle || settings.idleExpand) -> {
                                 haptic()
-                                Controls.expand(act.id)
+                                Controls.expand(act.instanceKey)
                             }
                             isExpanded && vertical && dy < -threshold -> {
                                 haptic()
@@ -782,15 +770,16 @@ private fun onTap(context: Context, act: Act, expanded: Boolean, s: IslandSettin
             // Пока вводят ответ, нажатие по карточке не должно открывать приложение
             if (IslandBus.reply.value != null) return
             // Нажатие на уведомление приложения открывает его, как на iPhone
-            act.n.message?.let { m ->
-                if (!Controls.send(context, m.intent)) Controls.openApp(context, m.pkg)
+            if (act.n.message != null) {
+                Controls.openMessage(context, act.n)
+                return
             }
             act.n.openPkg?.let { Controls.openApp(context, it) }
             act.n.alarm?.let { openAlarm(context, it) }
             IslandBus.notice.value = null
         }
         // Пустой остров раскрывается, если это не выключили в «Поведении»
-        is Act.Idle -> if (s.idleExpand) Controls.expand(act.id)
+        is Act.Idle -> if (s.idleExpand) Controls.expand(act.instanceKey)
         // Оплата: нажатие открывает приложение оплаты (окно Google открывать нечего)
         is Act.PayA -> if (act.pkg != PayMonitor.GMS) Controls.openApp(context, act.pkg)
         is Act.TimerA -> if (act.t.ringing) Controls.cancelTimer() else perform(context, s.tapAction, act)
@@ -807,10 +796,10 @@ private fun perform(context: Context, action: TapAction, act: Act) {
     if (act.transient) return
     val hasMedia = IslandBus.media.value != null
     when (action) {
-        TapAction.EXPAND -> Controls.expand(act.id)
-        TapAction.OPEN_APP -> act.pkg?.let { Controls.openApp(context, it) } ?: Controls.expand(act.id)
-        TapAction.PLAY_PAUSE -> if (hasMedia) Controls.playPause() else Controls.expand(act.id)
-        TapAction.NEXT_TRACK -> if (hasMedia) Controls.next() else Controls.expand(act.id)
+        TapAction.EXPAND -> Controls.expand(act.instanceKey)
+        TapAction.OPEN_APP -> act.pkg?.let { Controls.openApp(context, it) } ?: Controls.expand(act.instanceKey)
+        TapAction.PLAY_PAUSE -> if (hasMedia) Controls.playPause() else Controls.expand(act.instanceKey)
+        TapAction.NEXT_TRACK -> if (hasMedia) Controls.next() else Controls.expand(act.instanceKey)
         TapAction.SCREENSHOT -> Controls.screenshot()
         TapAction.NOTHING -> Unit
     }
@@ -835,7 +824,7 @@ private fun Bubble(act: Act, s: IslandSettings) {
             .then(if (s.outline) Modifier.border(s.outlineWidth.dp, Color(s.outlineColor), CircleShape) else Modifier)
             .clickable {
                 haptic()
-                Controls.expand(act.id)
+                Controls.expand(act.instanceKey)
             },
         contentAlignment = Alignment.Center,
     ) {

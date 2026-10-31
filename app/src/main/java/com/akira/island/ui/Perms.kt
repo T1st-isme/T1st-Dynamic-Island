@@ -1,6 +1,8 @@
 package com.akira.island.ui
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -9,21 +11,50 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.akira.island.service.IslandService
 import com.akira.island.service.NotifListener
 
 object Perms {
     fun accessibility(context: Context): Boolean {
+        if (Settings.Secure.getInt(context.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0) != 1) return false
         val enabled = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
             ?: return false
         val me = ComponentName(context, IslandService::class.java)
         return enabled.split(':').any { ComponentName.unflattenFromString(it) == me }
     }
 
-    fun notifications(context: Context): Boolean =
-        NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+    fun notifications(context: Context): Boolean {
+        val me = ComponentName(context, NotifListener::class.java)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            context.getSystemService(NotificationManager::class.java)?.isNotificationListenerAccessGranted(me) == true
+        } else {
+            // Android 8.0 has no component-specific NotificationManager API yet.
+            Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+                ?.split(':')?.any { ComponentName.unflattenFromString(it) == me } == true
+        }
+    }
+
+    fun telephony(context: Context): Boolean =
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+
+    /** Posting our own notification is separate from reading other apps' notifications. */
+    fun appNotifications(context: Context): Boolean =
+        context.getSystemService(NotificationManager::class.java)?.areNotificationsEnabled() == true
+
+    fun granted(context: Context, permission: String): Boolean =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+    fun exactAlarms(context: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms() == true
+
+    fun openExactAlarms(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            !start(context, Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")))) {
+            openAppDetails(context)
+        }
+    }
 
     fun bluetooth(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
@@ -37,9 +68,7 @@ object Perms {
         add(Manifest.permission.ANSWER_PHONE_CALLS)
     }.toTypedArray()
 
-    fun calls(context: Context): Boolean = CALL_PERMISSIONS.all {
-        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-    }
+    fun calls(context: Context): Boolean = CALL_PERMISSIONS.all { granted(context, it) }
 
     fun openAccessibility(context: Context) = start(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
 

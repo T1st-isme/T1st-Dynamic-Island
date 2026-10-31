@@ -10,6 +10,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 
 /** Сколько раз в секунду рисуются живые украшения: эквалайзер, светящаяся точка. 0 — с частотой экрана */
 @Serializable
@@ -85,16 +86,17 @@ enum class AccentMode(private val ru: String, private val en: String, private va
     val hint: String get() = tr(hintRu, hintEn)
 }
 
-/** Язык приложения и острова. «Как в системе» — русский, если телефон на русском, иначе английский. */
+/** App and island language. Existing enum names are retained for saved settings. */
 @Serializable
 enum class AppLanguage {
-    SYSTEM, RU, EN;
+    SYSTEM, RU, EN, VI;
 
     val title: String
         get() = when (this) {
             SYSTEM -> tr("Как в системе", "System default")
             RU -> "Русский"
             EN -> "English"
+            VI -> "Tiếng Việt"
         }
 }
 
@@ -103,6 +105,9 @@ data class IslandSettings(
     val enabled: Boolean = true,
     /** Язык приложения и острова */
     val language: AppLanguage = AppLanguage.SYSTEM,
+    /** Setup can be resumed after returning from Android settings or restarting the process. */
+    val setupCompleted: Boolean = false,
+    val setupStep: SetupStep = SetupStep.WELCOME,
 
     // Динамические карточки
     val cardMedia: Boolean = true,
@@ -263,6 +268,10 @@ data class IslandSettings(
     val msgLines: Int = 3,
     /** Уведомления приложения, которое сейчас открыто, тоже приходят в остров */
     val msgInApp: Boolean = false,
+    val notificationContent: NotificationContent = NotificationContent.FULL,
+    val hideNotificationContentOnLock: Boolean = true,
+    /** Only regular message banners are filtered; media, calls and other activity cards are separate. */
+    val blockedNotificationApps: Set<String> = emptySet(),
     /** Мессенджеры, чьи сообщения уже были в острове, и канал их уведомлений — для «Системных плашек» */
     val msgChannels: Map<String, String> = emptyMap(),
     /** Подсказку «Уведомления приходят дважды?» на главной убрали */
@@ -308,7 +317,7 @@ object SettingsRepo {
         prefs = p
         hadSavedSettings = p.contains(KEY)
         p.getString(KEY, null)?.let { raw ->
-            runCatching { json.decodeFromString<IslandSettings>(raw) }.onSuccess { _state.value = it }
+            runCatching { restoreSettings(raw, json) }.onSuccess { _state.value = it }
         }
         // 1.1 и раньше: размеры по умолчанию были меньше, чем у iPhone — переносим, если их не трогали
         val cur = _state.value
@@ -369,4 +378,11 @@ object SettingsRepo {
             fxShake = d.fxShake, batterySaver = d.batterySaver,
         )
     }
+}
+
+/** Existing installs do not get a blocking first-run flow. Explicit unfinished setup stays resumable. */
+internal fun restoreSettings(raw: String, json: Json): IslandSettings {
+    val saved = json.decodeFromString<IslandSettings>(raw)
+    return if ("setupCompleted" in json.parseToJsonElement(raw).jsonObject) saved
+    else saved.copy(setupCompleted = true)
 }

@@ -1,5 +1,6 @@
 package com.akira.island.service
 
+import android.Manifest
 import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.bluetooth.BluetoothClass
@@ -8,6 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -17,6 +19,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -49,6 +52,7 @@ class SystemEvents(private val context: Context) {
     private val keyguard = context.getSystemService(KeyguardManager::class.java)
     private val s get() = SettingsRepo.current
 
+    private var active = false
     private var lowWarned = false
     private var usbConnected: Boolean? = null
     private var brightnessMode = -1
@@ -62,7 +66,7 @@ class SystemEvents(private val context: Context) {
     private val warmingUp get() = SystemClock.elapsedRealtime() - startedAt < 3000
 
     private fun notice(enabled: Boolean, n: Notice) {
-        if (enabled && !warmingUp) IslandBus.post(n)
+        if (active && enabled && !warmingUp) IslandBus.post(n)
     }
 
     private val receiver = object : BroadcastReceiver() {
@@ -72,6 +76,7 @@ class SystemEvents(private val context: Context) {
     private val wifiCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             main.post {
+                if (!active) return@post
                 val wasEmpty = wifiNetworks.isEmpty()
                 wifiNetworks += network
                 if (wasEmpty) notice(s.evWifiOn, Notice("Wi-Fi", tr("Подключён", "Connected"), ic(R.drawable.ios_wifi), Tints.Blue))
@@ -80,6 +85,7 @@ class SystemEvents(private val context: Context) {
 
         override fun onLost(network: Network) {
             main.post {
+                if (!active) return@post
                 if (wifiNetworks.remove(network) && wifiNetworks.isEmpty()) {
                     notice(s.evWifiOff, Notice("Wi-Fi", tr("Отключён", "Disconnected"), ic(R.drawable.ios_wifi), Tints.Gray))
                 }
@@ -89,6 +95,7 @@ class SystemEvents(private val context: Context) {
 
     private val brightnessObserver = object : ContentObserver(main) {
         override fun onChange(selfChange: Boolean) {
+            if (!active) return
             val mode = Settings.System.getInt(
                 context.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE, 0,
             )
@@ -108,6 +115,8 @@ class SystemEvents(private val context: Context) {
     }
 
     fun start() {
+        active = true
+        MessageLockscreen.refresh(context)
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_BATTERY_CHANGED)
             addAction(Intent.ACTION_POWER_CONNECTED)
@@ -115,6 +124,8 @@ class SystemEvents(private val context: Context) {
             addAction(Intent.ACTION_USER_PRESENT)
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
             addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED)
             addAction(AudioManager.RINGER_MODE_CHANGED_ACTION)
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
@@ -148,12 +159,16 @@ class SystemEvents(private val context: Context) {
     }
 
     fun stop() {
+        active = false
         runCatching { context.unregisterReceiver(receiver) }
         runCatching { context.contentResolver.unregisterContentObserver(brightnessObserver) }
         runCatching { connectivity?.unregisterNetworkCallback(wifiCallback) }
+        main.removeCallbacksAndMessages(null)
+        wifiNetworks.clear()
     }
 
     private fun handle(intent: Intent, initialSticky: Boolean) {
+        if (!active) return
         when (intent.action) {
             Intent.ACTION_BATTERY_CHANGED -> onBattery(intent)
 
@@ -180,6 +195,7 @@ class SystemEvents(private val context: Context) {
             Intent.ACTION_USER_PRESENT -> onUnlocked()
 
             Intent.ACTION_SCREEN_OFF -> {
+                MessageLockscreen.refresh(context)
                 IslandBus.screenOn.value = false
                 // Блокировка может включиться чуть позже экрана — заранее прячем тексты, если она вообще есть
                 if (keyguard?.isDeviceSecure == true) IslandBus.locked.value = true
@@ -190,10 +206,14 @@ class SystemEvents(private val context: Context) {
             }
 
             Intent.ACTION_SCREEN_ON -> {
+                MessageLockscreen.refresh(context)
                 IslandBus.screenOn.value = true
                 IslandBus.locked.value = isLocked()
                 IslandBus.keyguard.value = isKeyguard()
             }
+
+            Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED ->
+                IslandBus.wallClockVersion.value += 1
 
             PowerManager.ACTION_POWER_SAVE_MODE_CHANGED ->
                 IslandBus.powerSave.value = context.getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
@@ -234,6 +254,9 @@ class SystemEvents(private val context: Context) {
                 val device = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
                     ?: return
                 // Без разрешения BLUETOOTH_CONNECT имени и класса устройства не узнать
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+                ) return
                 val name = runCatching { device.name }.getOrNull()
                 // Класс не прочитать — не знаем, наушники ли это (могут быть часы или машина), молчим
                 val isAudio = runCatching {

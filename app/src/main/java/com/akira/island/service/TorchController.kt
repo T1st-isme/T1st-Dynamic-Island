@@ -25,20 +25,24 @@ class TorchController(context: Context) {
     private val handler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var collapseJob: Job? = null
+    private var active = false
 
     private val callback = object : CameraManager.TorchCallback() {
         override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+            if (!active) return
             states[cameraId] = enabled
             publish()
         }
 
         override fun onTorchStrengthLevelChanged(cameraId: String, newStrengthLevel: Int) {
+            if (!active) return
             publish()
         }
     }
 
     fun start() {
         cm ?: return
+        active = true
         runCatching { cm.registerTorchCallback(callback, handler) }
         Controls.torchOff = {
             states.filterValues { it }.keys.forEach { id -> runCatching { cm.setTorchMode(id, false) } }
@@ -55,8 +59,11 @@ class TorchController(context: Context) {
     }
 
     fun stop() {
+        active = false
         scope.cancel()
         runCatching { cm?.unregisterTorchCallback(callback) }
+        handler.removeCallbacksAndMessages(null)
+        states.clear()
         Controls.torchOn = {}
         Controls.torchOff = {}
         Controls.torchLevel = {}

@@ -131,7 +131,7 @@ object PayMonitor {
         readyPkg = pkg
         readyShownAt = SystemClock.elapsedRealtime()
         readyShownPkg = appFor(pkg)
-        PayDebug.add(tr("Экран оплаты", "Payment screen"), pkg)
+        PayDebug.add(tr("Экран оплаты", "Payment screen", "Payment screen"), pkg)
         IslandBus.payReady.value = PayReady(pkg, NotificationParser.icon(context, appFor(pkg)))
         readyTimeout?.cancel()
         readyTimeout = IslandBus.scope.launch {

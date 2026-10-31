@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.akira.island.core.Lang
 import com.akira.island.core.tr
 import com.akira.island.data.SettingsRepo
 import com.akira.island.ui.Group
@@ -73,7 +74,7 @@ fun ColorsScreen(onBack: () -> Unit) {
                 tr("Пока играет музыка, контур окрашивается в цвет обложки", "While music plays, the outline takes the artwork's color"),
                 s.outlineFromArt, color = Tile.Pink) { v -> SettingsRepo.update { copy(outlineFromArt = v, outline = outline || v) } }
             GroupSlider(Pos.Last, Icons.Rounded.LineWeight, tr("Толщина", "Thickness"), s.outlineWidth, 0.5f..4f,
-                "%.1f dp".format(s.outlineWidth), color = Tile.Gray) { v ->
+                Lang.format("%.1f dp", s.outlineWidth), color = Tile.Gray) { v ->
                 SettingsRepo.update { copy(outlineWidth = (v * 2).toInt() / 2f) }
             }
         }

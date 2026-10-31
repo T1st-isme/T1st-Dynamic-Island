@@ -1,6 +1,5 @@
 package com.akira.island.service
 
-import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.Person
@@ -9,7 +8,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
 import android.os.SystemClock
-import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.annotation.RequiresApi
@@ -26,6 +24,7 @@ import com.akira.island.core.IslandBus
 import com.akira.island.core.MsgAction
 import com.akira.island.core.Notice
 import com.akira.island.core.NoticeStyle
+import com.akira.island.core.NotificationPrivacy
 import com.akira.island.core.Tints
 import com.akira.island.R
 import com.akira.island.data.AccentMode
@@ -59,7 +58,8 @@ object Messages {
 
     fun maybeShow(service: NotificationListenerService, sbn: StatusBarNotification, appName: String) {
         val s = SettingsRepo.current
-        if (!s.cardMessages || !s.enabled) return
+        // Reject blocked sources before reading personal extras or updating deduplication signatures.
+        if (!NotificationPrivacy.allowsSource(sbn.packageName, s)) return
         val n = sbn.notification ?: return
         if (sbn.isOngoing) return
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
@@ -78,17 +78,21 @@ object Messages {
 
         // Экран блокировки: как в шторке — уведомления там скрыты, «секретные» не показываются,
         // у остальных без разрешения показывать содержимое видно только название приложения
-        val locked = IslandBus.locked.value
-        if (locked && !Lockscreen.showsNotifications(service)) return
-        val visibility = if (ranked && ranking.lockscreenVisibilityOverride != NotificationListenerService.Ranking.VISIBILITY_NO_OVERRIDE) {
+        MessageLockscreen.refresh(service)
+        val locked = IslandBus.messageLocked
+        val systemPolicy = IslandBus.messageSystemPolicy.value
+        val showOnLock = systemPolicy.showOnLock
+        if (locked && !showOnLock) return
+        val visibility = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && ranked &&
+            ranking.lockscreenVisibilityOverride != NotificationListenerService.Ranking.VISIBILITY_NO_OVERRIDE
+        ) {
             ranking.lockscreenVisibilityOverride
         } else {
             n.visibility
         }
         val secret = visibility == Notification.VISIBILITY_SECRET
         if (locked && secret) return
-        val sensitive = Lockscreen.isSecure(service) &&
-            (secret || visibility == Notification.VISIBILITY_PRIVATE && !Lockscreen.showsPrivate(service))
+        val sensitive = secret || visibility == Notification.VISIBILITY_PRIVATE && !systemPolicy.showPrivate
 
         val ex = n.extras ?: return
         // Мессенджер дописал в уведомление ваш же ответ — это не новое сообщение
@@ -126,6 +130,8 @@ object Messages {
             accent = if (s.accentMode == AccentMode.ADAPTIVE) accentOf(avatar ?: NotificationParser.icon(service, sbn.packageName)) else null,
             history = history(ex),
             sensitive = sensitive,
+            hideOnLock = secret || !showOnLock,
+            privateOnLock = n.visibility == Notification.VISIBILITY_PRIVATE,
         )
         IslandBus.post(
             Notice(
@@ -232,27 +238,5 @@ object Messages {
     fun forget(key: String) {
         shown.remove(key)
         repliedAt.remove(key)
-    }
-}
-
-/** Настройки экрана блокировки, как их понимает шторка. */
-private object Lockscreen {
-    /** Есть ли PIN-код, графический ключ или пароль: без них система содержимое не прячет. */
-    fun isSecure(context: Context): Boolean =
-        context.getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
-
-    /** «Уведомления на заблокированном экране» не выключены. */
-    fun showsNotifications(context: Context): Boolean = secureInt(context, "lock_screen_show_notifications", 1) != 0
-
-    /** Разрешено показывать содержимое уведомлений; если настройку не прочитать — считаем, что нет. */
-    fun showsPrivate(context: Context): Boolean = secureInt(context, "lock_screen_allow_private_notifications", 0) != 0
-
-    /** Настройку ни разу не меняли — у системы она включена; прочитать нельзя — [unreadable]. */
-    private fun secureInt(context: Context, name: String, unreadable: Int): Int = try {
-        Settings.Secure.getInt(context.contentResolver, name)
-    } catch (_: Settings.SettingNotFoundException) {
-        1
-    } catch (_: Exception) {
-        unreadable
     }
 }

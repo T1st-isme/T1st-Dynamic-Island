@@ -6,31 +6,38 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.ui.platform.LocalConfiguration
-import com.akira.island.data.AppLanguage
 import com.akira.island.data.SettingsRepo
 import java.util.Locale
 
 /**
- * Язык приложения и острова: русский или английский. «Как в системе» — русский, если телефон на русском,
- * иначе английский. Строки пишутся парой прямо в коде: tr("Зарядка", "Charging").
+ * App and island language. SYSTEM supports Russian and Vietnamese, otherwise English.
+ * Legacy tr(ru, en) labels use the exact-English Vietnamese catalog; dynamic labels
+ * supply tr(ru, en, vi) explicitly.
  */
 object Lang {
-    val en: Boolean
-        get() = when (SettingsRepo.current.language) {
-            AppLanguage.EN -> true
-            AppLanguage.RU -> false
-            AppLanguage.SYSTEM -> systemLanguage() != "ru"
-        }
+    val code: String
+        get() = resolveLanguage(SettingsRepo.current.language.name, systemLanguage())
 
-    /** Для дат: «пятница, 24 октября» или «Friday, October 24» */
-    val locale: Locale get() = if (en) Locale.ENGLISH else Locale.forLanguageTag("ru")
+    /** Compatibility for non-Russian parser/release-note branches, not a locale ID. */
+    val en: Boolean
+        get() = code != "ru"
+
+    /** Use for dates and user-facing number formatting, never for technical logs. */
+    val locale: Locale get() = languageLocale(code)
+
+    /**
+     * Vietnamese formatting follows app language, even on an English phone.
+     * Keep the existing system-locale number behavior for RU/EN.
+     */
+    fun format(pattern: String, vararg args: Any): String =
+        String.format(if (code == "vi") locale else Locale.getDefault(), pattern, *args)
 
     private fun systemLanguage(): String =
         runCatching { Resources.getSystem().configuration.locales[0].language }.getOrNull() ?: Locale.getDefault().language
 }
 
-/** Строка на текущем языке. */
-fun tr(ru: String, en: String): String = if (Lang.en) en else ru
+/** Source-compatible with existing pairs. Supply vi explicitly for interpolation. */
+fun tr(ru: String, en: String, vi: String? = null): String = translate(Lang.code, ru, en, vi)
 
 /**
  * Сменили язык (в настройках или в системе) — всё внутри рисуется заново уже на новом языке.
@@ -41,5 +48,5 @@ fun LangScope(content: @Composable () -> Unit) {
     val s by SettingsRepo.state.collectAsState()
     // Язык системы меняется вместе с конфигурацией — чтение подписывает на неё
     LocalConfiguration.current
-    key(s.language, Lang.en) { content() }
+    key(s.language, Lang.code) { content() }
 }

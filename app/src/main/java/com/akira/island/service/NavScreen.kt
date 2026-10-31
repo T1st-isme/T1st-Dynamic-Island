@@ -171,7 +171,7 @@ object NavScreenParser {
         val time = all.firstOrNull { clock.matches(it.text) }?.text
         val left = (all.firstOrNull { hours.matches(it.text) } ?: all.firstOrNull { minutes.matches(it.text) })
             ?.text?.replace(Regex("""\s+"""), " ")
-        val eta = listOfNotNull(time?.let { tr("Прибытие в $it", "Arrive $it") }, left?.let(LiveParser::units),
+        val eta = listOfNotNull(time?.let { tr("Прибытие в $it", "Arrive $it", "Đến lúc $it") }, left?.let(LiveParser::units),
             total?.text?.replace(Regex("""\s+"""), " ")?.let(LiveParser::units))
             .takeIf { it.isNotEmpty() }?.joinToString(" · ")
         // Направление — только из подсказки: в подписях кнопок («← шаг влево») тоже бывают «влево» и «вправо»
@@ -283,6 +283,7 @@ class NavScreenReader(private val service: AccessibilityService, private val sco
         if (pkg == current && job?.isActive == true) return
         stop()
         clearJob?.cancel()
+        NavScreen.data.value = NavScreen.data.value.filterKeys { it == pkg }
         current = pkg
         job = scope.launch {
             while (isActive) {
@@ -304,6 +305,17 @@ class NavScreenReader(private val service: AccessibilityService, private val sco
             delay(15_000)
             NavScreen.data.value = NavScreen.data.value - pkg
         }
+    }
+
+    /** Final service teardown: no delayed cleanup may outlive the cancelled session scope. */
+    fun close() {
+        job?.cancel()
+        clearJob?.cancel()
+        job = null
+        clearJob = null
+        current = null
+        turns.clear()
+        NavScreen.data.value = emptyMap()
     }
 
     private fun read(pkg: String) {
@@ -373,6 +385,10 @@ class NavScreenReader(private val service: AccessibilityService, private val sco
             service.takeScreenshot(Display.DEFAULT_DISPLAY, service.mainExecutor, object : AccessibilityService.TakeScreenshotCallback {
                 override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
                     val buffer = result.hardwareBuffer
+                    if (current != pkg) {
+                        buffer.close()
+                        return
+                    }
                     val turn = runCatching {
                         val hw = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace) ?: return@runCatching null
                         val soft = hw.copy(Bitmap.Config.ARGB_8888, false)
@@ -387,6 +403,7 @@ class NavScreenReader(private val service: AccessibilityService, private val sco
                         TurnClassifier.classify(px, w, h)
                     }.getOrNull()
                     buffer.close()
+                    if (current != pkg) return
                     if (turn != null) {
                         turns[pkg] = turn
                         NavScreen.data.value[pkg]?.let { sn ->

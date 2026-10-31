@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
  * засыпает и обычное ожидание стоит, поэтому к концу таймера его будит будильник системы.
  */
 class TimerAlarm(private val context: Context, private val scope: CoroutineScope) {
+    private var active = false
     private val alarms = context.getSystemService(AlarmManager::class.java)
     private val wakeIntent = PendingIntent.getBroadcast(
         context, 0, Intent(ACTION_WAKE).setPackage(context.packageName),
@@ -34,6 +35,7 @@ class TimerAlarm(private val context: Context, private val scope: CoroutineScope
     )
     private val wakeReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
+            if (!active) return
             ringIfDue()
             // Звонок включаем сразу, пока система держит телефон проснувшимся ради этого сообщения
             if (IslandBus.timer.value?.ringing == true) startRinging()
@@ -56,11 +58,13 @@ class TimerAlarm(private val context: Context, private val scope: CoroutineScope
     }
 
     fun start() {
+        active = true
         ContextCompat.registerReceiver(context, wakeReceiver, IntentFilter(ACTION_WAKE), ContextCompat.RECEIVER_NOT_EXPORTED)
         collectJob = scope.launch { IslandBus.timer.collect { onTimer(it) } }
     }
 
     fun stop() {
+        active = false
         collectJob?.cancel()
         finishJob?.cancel()
         cancelWake()

@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import com.akira.island.R
+import com.akira.island.core.ServiceDiagnostics
 import com.akira.island.core.tr
 import com.akira.island.data.SettingsRepo
 import com.akira.island.ui.Perms
@@ -33,12 +34,21 @@ class KeepAliveService : Service() {
             } else {
                 startForeground(ID, notification())
             }
+        }.onFailure { error ->
+            ServiceDiagnostics.update { copy(keepAliveRunning = false, keepAliveError = "foreground: ${error.javaClass.simpleName}") }
         }.isSuccess
-        if (!shown || !SettingsRepo.current.keepAlive) {
+        if (!shown || !SettingsRepo.current.keepAlive || !Perms.accessibility(this)) {
+            ServiceDiagnostics.update { copy(keepAliveRunning = false) }
             stopSelf()
             return START_NOT_STICKY
         }
+        ServiceDiagnostics.update { copy(keepAliveRunning = true, keepAliveError = null) }
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        ServiceDiagnostics.update { copy(keepAliveRunning = false) }
+        super.onDestroy()
     }
 
     private fun notification(): Notification {
@@ -54,8 +64,8 @@ class KeepAliveService : Service() {
             ?.let { PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE) }
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_tab_island)
-            .setContentTitle(tr("Остров работает", "The island is running"))
-            .setContentText(tr("Уведомление не даёт системе закрыть остров", "This notification keeps the system from closing the island"))
+            .setContentTitle(tr("Удержание острова в фоне", "Island background keep-alive"))
+            .setContentText(tr("Состояние острова — в разделе «Разрешения»", "Check Permissions for the island's service status"))
             .setContentIntent(open)
             .setOngoing(true)
             .setShowWhen(false)
@@ -75,8 +85,12 @@ class KeepAliveService : Service() {
             val intent = Intent(context, KeepAliveService::class.java)
             if (SettingsRepo.current.keepAlive && Perms.accessibility(context)) {
                 runCatching { context.startForegroundService(intent) }
+                    .onFailure { error ->
+                        ServiceDiagnostics.update { copy(keepAliveError = "start: ${error.javaClass.simpleName}") }
+                    }
             } else {
                 context.stopService(intent)
+                ServiceDiagnostics.update { copy(keepAliveError = null) }
             }
         }
     }

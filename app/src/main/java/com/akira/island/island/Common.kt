@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
@@ -81,7 +82,6 @@ import com.akira.island.data.ExpandStyle
 import com.akira.island.data.IslandSettings
 import com.akira.island.data.SettingsRepo
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import com.akira.island.core.IslandBus
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -129,15 +129,15 @@ val ExpoOut = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
 
 fun animDurationMs(s: IslandSettings): Int = 160 + s.durationPercent.coerceIn(0, 100) * 6
 
-/** Текущее время (elapsedRealtime) с обновлением раз в [periodMs]; пока экран погашен — не обновляется. */
+/** Elapsed time; visual ticks stop while the overlay is hidden or the screen is off. */
 @Composable
 fun rememberNow(periodMs: Long, active: Boolean = true): Long {
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
-    LaunchedEffect(periodMs, active) {
+    RenderingEffect(periodMs, active) {
+        now = SystemClock.elapsedRealtime()
         while (active) {
-            if (!IslandBus.screenOn.value) IslandBus.screenOn.first { it }
-            now = SystemClock.elapsedRealtime()
             delay(periodMs)
+            now = SystemClock.elapsedRealtime()
         }
     }
     return now
@@ -153,10 +153,9 @@ fun rememberNow(periodMs: Long, active: Boolean = true): Long {
 @Composable
 fun rememberFxClock(active: Boolean): State<Long> {
     val time = remember { mutableLongStateOf(0L) }
-    LaunchedEffect(active) {
+    RenderingEffect(active) {
         var last = 0L
         while (active) {
-            if (!IslandBus.screenOn.value) IslandBus.screenOn.first { it }
             val fps = SettingsRepo.current.fxRate.fps
             val step = if (fps > 0) 1000L / fps else 0L
             // Кадр экрана раньше срока пропускаем: на 120 Гц при 60 кадрах рисуется каждый второй
@@ -185,9 +184,9 @@ fun pingPong(t: Long, halfMs: Int): Float {
 @Composable
 fun rememberWallNow(periodMs: Long): Long {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(periodMs) {
+    val wallClockVersion by IslandBus.wallClockVersion.collectAsState()
+    RenderingEffect(periodMs, wallClockVersion) {
         while (true) {
-            if (!IslandBus.screenOn.value) IslandBus.screenOn.first { it }
             now = System.currentTimeMillis()
             delay(periodMs)
         }

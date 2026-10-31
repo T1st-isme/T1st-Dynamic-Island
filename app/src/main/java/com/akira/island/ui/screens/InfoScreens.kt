@@ -202,7 +202,7 @@ fun AppInfoScreen(open: (Screen) -> Unit) {
             }
             GroupItem(Pos.Middle, Icons.Rounded.Refresh, tr("Проверить сейчас", "Check now"), updateStatusText(update, version),
                 onClick = { scope.launch { UpdateChecker.check(context.applicationContext, force = true) } }, color = Tile.Blue)
-            GroupItem(Pos.Last, Icons.Rounded.NewReleases, tr("Что нового", "What's new"), tr("Изменения в версии $version", "Changes in version $version"),
+            GroupItem(Pos.Last, Icons.Rounded.NewReleases, tr("Что нового", "What's new"), tr("Изменения в версии $version", "Changes in version $version", "Thay đổi trong phiên bản $version"),
                 onClick = { notes = true }, color = Tile.Purple) { Arrow() }
         }
 
@@ -249,10 +249,10 @@ private fun AppHeader(version: String, update: UpdateState) {
         }
         Spacer(Modifier.height(14.dp))
         Text(tr("Динамический остров", "Dynamic Island"), color = Ui.Text, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text(tr("Версия $version", "Version $version"), color = Ui.Sub, fontSize = 15.sp, modifier = Modifier.padding(top = 2.dp))
+        Text(tr("Версия $version", "Version $version", "Phiên bản $version"), color = Ui.Sub, fontSize = 15.sp, modifier = Modifier.padding(top = 2.dp))
         val (label, color) = when (update) {
             UpdateState.UpToDate -> tr("Последняя версия", "Up to date") to Tints.Green
-            is UpdateState.Available -> tr("Доступна версия ${update.release.version}", "Version ${update.release.version} is available") to Ui.Primary
+            is UpdateState.Available -> tr("Доступна версия ${update.release.version}", "Version ${update.release.version} is available", "Đã có phiên bản ${update.release.version}") to Ui.Primary
             UpdateState.Checking -> tr("Проверяю обновления…", "Checking for updates…") to Ui.Sub
             is UpdateState.Error -> tr("Не удалось проверить обновления", "Couldn't check for updates") to Tints.Orange
             UpdateState.Idle -> null to Ui.Sub

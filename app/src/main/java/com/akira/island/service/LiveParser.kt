@@ -137,7 +137,9 @@ object LiveParser {
 
     /** По-английски — и единицы: «4,2 км» → «4.2 km», «12 мин» → «12 min». Иначе как прислал навигатор. */
     fun units(s: String): String {
-        if (!Lang.en) return s
+        // Preserve existing EN normalization; Vietnamese leaves app-provided units
+        // untouched rather than translating or rewriting notification content.
+        if (Lang.code != "en") return s
         return ruUnit.replace(s) { m ->
             val (whole, frac, unit) = m.destructured
             val n = if (frac.isEmpty()) whole else "$whole.$frac"
@@ -156,7 +158,7 @@ object LiveParser {
         val joined = texts.joinToString(" ")
         val time = clock.find(joined)?.value
         val min = minutes.find(joined)?.value
-        return listOfNotNull(time?.let { tr("Прибытие в $it", "Arrive $it") }, min?.replace(Regex("""\s+"""), " ")?.let(::units))
+        return listOfNotNull(time?.let { tr("Прибытие в $it", "Arrive $it", "Đến lúc $it") }, min?.replace(Regex("""\s+"""), " ")?.let(::units))
             .takeIf { it.isNotEmpty() }?.joinToString(" · ")
     }
 

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dynamic Island</string>
+    <string name="a11y_label">Dynamic Island</string>
+    <string name="tile_label">Đảo</string>
+    <string name="a11y_desc">Hiển thị một vùng dạng viên nang theo phong cách Dynamic Island trên camera: nhạc, bộ hẹn giờ, tiến trình tải xuống, đèn pin và sự kiện hệ thống. Dịch vụ nhận biết ứng dụng đang mở để ẩn trình phát nhạc và hiển thị thanh toán. Màn hình chỉ được đọc trong ứng dụng dẫn đường (2GIS, Yandex Navigator, Maps và các ứng dụng khác), ứng dụng Đồng hồ và ứng dụng thanh toán khi chúng đang mở: trong ứng dụng dẫn đường — khoảng cách đến chỗ rẽ tiếp theo, tên đường, giờ đến và hướng mũi tên; trong Đồng hồ — thời gian hẹn giờ và bấm giờ; trong ứng dụng thanh toán (Mir Pay, T-Pay, Google Wallet và các ứng dụng khác) — màn hình thanh toán bằng điện thoại và số tiền, để hiển thị “Đưa gần đầu đọc” rồi “Đã thanh toán”. Dữ liệu đọc được chỉ lưu trên điện thoại; chỉ tên bài hát và nghệ sĩ được gửi lên mạng để tìm lời bài hát.</string>
+</resources>

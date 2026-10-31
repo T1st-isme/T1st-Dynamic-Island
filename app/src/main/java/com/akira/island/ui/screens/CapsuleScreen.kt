@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.akira.island.core.IslandBus
+import com.akira.island.core.Lang
 import com.akira.island.core.Tints
 import com.akira.island.core.tr
 import com.akira.island.data.Elasticity
@@ -67,11 +68,14 @@ fun CapsuleScreen(open: (Screen) -> Unit) {
         SectionHeader(tr("Положение и размер", "Position and size"))
         Group {
             GroupItem(Pos.First, Icons.Rounded.OpenWith, tr("Положение и размер", "Position and size"),
-                tr("Капсула ${s.width}×${s.height} dp — подогнать под камеру", "Capsule ${s.width}×${s.height} dp — fit it to the camera"),
+                tr("Капсула ${s.width}×${s.height} dp — подогнать под камеру", "Capsule ${s.width}×${s.height} dp — fit it to the camera",
+                    "Viên nang ${s.width}×${s.height} dp — căn cho vừa camera"),
                 color = Tile.Indigo, onClick = { open(Screen.SIZE) }) { Arrow() }
             GroupItem(Pos.Last, Icons.Rounded.SwapHoriz, tr("Размер с активностью", "Size with activity"),
-                if (s.activeWidth == 0) tr("Толщина +${s.activeExtra} dp, ширина как без неё", "Thickness +${s.activeExtra} dp, width as without it")
-                else tr("Толщина +${s.activeExtra}, ширина +${s.activeWidth} dp", "Thickness +${s.activeExtra}, width +${s.activeWidth} dp"),
+                if (s.activeWidth == 0) tr("Толщина +${s.activeExtra} dp, ширина как без неё", "Thickness +${s.activeExtra} dp, width as without it",
+                    "Độ dày +${s.activeExtra} dp, chiều rộng như khi không có hoạt động")
+                else tr("Толщина +${s.activeExtra}, ширина +${s.activeWidth} dp", "Thickness +${s.activeExtra}, width +${s.activeWidth} dp",
+                    "Độ dày +${s.activeExtra}, chiều rộng +${s.activeWidth} dp"),
                 color = Tile.Purple, onClick = { open(Screen.LOOK) }) { Arrow() }
         }
 
@@ -174,7 +178,7 @@ fun AnimScreen(onBack: () -> Unit) {
             // Сколько видно событие; плашки, которым нужно больше времени (сообщение с кнопками, оплата), — от него же
             GroupSlider(
                 Pos.Middle, Icons.Rounded.Schedule, tr("Показ событий", "Event display"),
-                value = s.noticeDurationMs / 1000f, range = 1.5f..6f, label = tr("%.1f с", "%.1f s").format(s.noticeDurationMs / 1000f), color = Tile.Orange,
+                value = s.noticeDurationMs / 1000f, range = 1.5f..6f, label = Lang.format(tr("%.1f с", "%.1f s"), s.noticeDurationMs / 1000f), color = Tile.Orange,
             ) { v -> SettingsRepo.update { copy(noticeDurationMs = (v * 1000).toInt()) } }
             GroupToggle(Pos.Last, Icons.Rounded.BlurOn, tr("Уменьшить эффекты", "Reduce effects"),
                 tr("Может быть полезно для не самых производительных устройств", "Can help on less powerful devices"),
@@ -231,7 +235,8 @@ fun EffectsScreen(onBack: () -> Unit) {
             // Раскрытие и смена содержимого всегда идут с частотой экрана — это только для того, что движется постоянно
             GroupItem(Pos.Middle, Icons.Rounded.Speed, tr("Частота эквалайзера", "Equalizer frame rate"),
                 tr("${s.fxRate.title}. Ещё светящаяся точка фонарика и навигатора",
-                    "${s.fxRate.title}. Also the glowing dot of the flashlight and navigation"),
+                    "${s.fxRate.title}. Also the glowing dot of the flashlight and navigation",
+                    "${s.fxRate.title}. Cả chấm sáng của đèn pin và dẫn đường"),
                 color = Tile.Indigo, onClick = { rateDialog = true })
             GroupToggle(Pos.Last, Icons.Rounded.NotificationsActive, tr("Вздрагивание", "Shake"),
                 tr("Капсула вздрагивает при смене режима звука, колокольчик звонящего таймера качается",

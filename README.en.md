@@ -30,6 +30,8 @@ Notifications with reply · navigation · payments · music with lyrics · calls
 > [!NOTE]
 > Since 1.6.1 the app and the island speak English and Russian — switch in Features → General → Language («Функции → Общие → Язык»). Russian labels in brackets are for older versions.
 
+The current development build also adds **Tiếng Việt**, a resumable setup guide, and message privacy controls. See the [phase 3 guide](docs/phase-3-usability.md); these changes are not a claim about the APK currently published on GitHub Releases.
+
 ---
 
 ## ✨ What's new in 1.6.5
@@ -127,12 +129,14 @@ New versions install over old ones; your settings are kept (from 1.6.0 or older 
 Four tabs:
 
 - **Home** («Главная») — the live preview, whether the island is on, **permissions** and **Try it** («Проверка»): every island demo on one screen.
+  - Development build: **Setup guide** explains language, required accessibility, optional permissions and privacy. Steps can be skipped; existing installations are not forced through it.
 - **Features** («Функции») — what the island shows and how you handle it:
   - **Dynamic cards**, **notifications** and **events** — each can be turned off; notifications also have reply buttons, the number of text lines and the button color: lavender, system, from the avatar or custom.
+    - Development build: message banners can show full content, app name only or icon only; hide content while locked is on by default. **Message apps** filters apps that have already sent messages. These controls do not filter calls, media, navigation or payments.
   - **Lyrics** — in the expanded player.
   - **Gestures** and **Behavior** — when to show and collapse the island, the second-activity circle, haptics, turning the screen on for a call.
   - **System banners** — shortcuts to the Android settings where you turn off the pop-ups of the dialer, Clock and battery, so only the island shows these events.
-  - **Language** — English or Russian, for the app and the island at once (General → Language).
+  - **Language** — English or Russian, plus Vietnamese in the development build, for the app and the island at once (General → Language).
 - **Appearance** («Оформление») — how the island looks:
   - **Position and size** — horizontal offset, top offset, width, height and Like a notch; the capsule updates on screen right away.
   - **Size with activity** — how much thicker and wider the capsule with an activity is than the idle one, with a live preview.

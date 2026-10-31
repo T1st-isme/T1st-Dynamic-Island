@@ -106,7 +106,7 @@ object UpdateChecker {
             announced = available.version
             IslandBus.post(
                 Notice(
-                    title = tr("Доступна версия ${available.version}", "Version ${available.version} is available"),
+                    title = tr("Доступна версия ${available.version}", "Version ${available.version} is available", "Đã có phiên bản ${available.version}"),
                     icon = Ios.load(context, R.drawable.ios_download),
                     tint = Tints.Lavender,
                     caption = releaseHighlights(available.notes) ?: tr("Скачается и установится в одно нажатие", "Downloads and installs in one tap"),
@@ -125,7 +125,7 @@ object UpdateChecker {
 
     /** Карточка «Обновлено до …» в острове — после установки и в примере. */
     fun updatedNotice(context: Context, version: String) = Notice(
-        title = tr("Обновлено до $version", "Updated to $version"),
+        title = tr("Обновлено до $version", "Updated to $version", "Đã cập nhật lên $version"),
         icon = Ios.load(context, R.drawable.ios_check),
         tint = Tints.Green,
         caption = tr("Всё готово, настройки сохранены", "All set, your settings are kept"),

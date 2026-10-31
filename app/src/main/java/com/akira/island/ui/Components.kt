@@ -141,9 +141,9 @@ fun Page(
 }
 
 @Composable
-fun PillAction(text: String, onClick: () -> Unit) {
+fun PillAction(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
-        Modifier
+        modifier
             .clip(CircleShape)
             .background(Ui.IconBg)
             .clickable(onClick = onClick)

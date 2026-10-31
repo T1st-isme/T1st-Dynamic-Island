@@ -30,8 +30,10 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.lifecycle.Lifecycle
 import com.akira.island.core.Controls
 import com.akira.island.core.IslandBus
+import com.akira.island.core.ServiceDiagnostics
 import com.akira.island.core.ServiceCommand
 import com.akira.island.core.NoticeStyle
 import com.akira.island.R
@@ -70,12 +72,13 @@ import kotlin.math.max
  * над островом, двигается за ним и передаёт касания в окно рисования.
  */
 class IslandService : AccessibilityService() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val session = ServiceSession(::startSession, ::stopSession)
     private val handler = Handler(Looper.getMainLooper())
     private var wm: WindowManager? = null
     private var display: FrameLayout? = null
     private var touch: TouchRoot? = null
-    private val owner = OverlayLifecycleOwner()
+    private var owner = OverlayLifecycleOwner()
     private var events: SystemEvents? = null
     private var torch: TorchController? = null
     private var alarm: TimerAlarm? = null
@@ -174,23 +177,41 @@ class IslandService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        runCatching {
+            session.connect()
+            IslandBus.serviceRunning.value = true
+            ServiceDiagnostics.update { copy(accessibilityError = null) }
+            KeepAliveService.sync(this)
+        }.onFailure { error ->
+            IslandBus.serviceRunning.value = false
+            ServiceDiagnostics.update { copy(accessibilityError = "start: ${error.javaClass.simpleName}") }
+        }
+        IslandTile.refresh(this)
+    }
+
+    private fun startSession() {
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        owner = OverlayLifecycleOwner()
         SettingsRepo.init(this)
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         IslandBus.landscape.value = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-        createWindows()
-        KeepAliveService.sync(this)
-        IslandTile.refresh(this)
-        events = SystemEvents(this).also { it.start() }
+        events = SystemEvents(this)
+        events?.start()
         keyguardShown = keyguard?.isKeyguardLocked == true
-        torch = TorchController(this).also { it.start() }
-        alarm = TimerAlarm(this, scope).also { it.start() }
-        calls = CallMonitor(this, scope).also { it.start() }
+        // Lock/screen state must be current before Compose can render retained message banners.
+        createWindows()
+        torch = TorchController(this)
+        torch?.start()
+        alarm = TimerAlarm(this, scope)
+        alarm?.start()
+        calls = CallMonitor(this, scope)
+        calls?.start()
         navReader = NavScreenReader(this, scope)
         clockReader = ClockScreenReader(this, scope).also { ClockControl.reader = it }
         payReader = PayScreenReader(this, scope)
-        alarmMonitor = AlarmMonitor(this).also { it.start() }
-        IslandBus.serviceRunning.value = true
+        alarmMonitor = AlarmMonitor(this)
+        alarmMonitor?.start()
 
         // Входящий смахнули — он скрыт, пока звонит; перестал звонить — следующий входящий снова в острове.
         // Здесь, а не в острове: пока остров спрятан, он не рисуется и ничего бы не сбросил
@@ -244,21 +265,29 @@ class IslandService : AccessibilityService() {
             }
         }
 
-        // Liquid Glass: блики сдвигаются при наклоне телефона, датчик слушаем только пока стекло включено и экран горит
+        // Use the same visibility lifecycle as rendering, including screen, schedule and rotation.
         scope.launch {
-            combine(SettingsRepo.state.map { it.liquidGlass && it.enabled }, IslandBus.screenOn) { glass, on -> glass && on }
+            combine(SettingsRepo.state, IslandBus.powerSave, owner.lifecycle.currentStateFlow) { saved, saver, state ->
+                val s = saved.forPowerSave(saver)
+                s.liquidGlass && !s.reduceEffects && state.isAtLeast(Lifecycle.State.STARTED)
+            }
                 .distinctUntilChanged()
                 .collect { setTiltEnabled(it) }
         }
 
         scope.launch {
-            combine(SettingsRepo.state, IslandBus.landscape, IslandBus.offSchedule) { s, land, _ -> s to land }
-                .collect { (s, land) -> applySettings(s, land) }
+            combine(SettingsRepo.state, IslandBus.landscape, IslandBus.offSchedule, IslandBus.screenOn) { s, land, _, on ->
+                Triple(s, land, on)
+            }.collect { (s, land, on) -> applySettings(s, land, on) }
         }
 
         // «По расписанию»: проверяем ровно на границах часов и со включением экрана (пока телефон спит, ожидание стоит)
         scope.launch {
-            combine(SettingsRepo.state.map { Triple(it.scheduleOn, it.scheduleFrom, it.scheduleTo) }.distinctUntilChanged(), IslandBus.screenOn) { sch, _ -> sch }
+            combine(
+                SettingsRepo.state.map { Triple(it.scheduleOn, it.scheduleFrom, it.scheduleTo) }.distinctUntilChanged(),
+                IslandBus.screenOn,
+                IslandBus.wallClockVersion,
+            ) { sch, _, _ -> sch }
                 .collectLatest { (on) ->
                     while (true) {
                         val now = Calendar.getInstance()
@@ -337,10 +366,25 @@ class IslandService : AccessibilityService() {
         owner.create()
         owner.attach(drawRoot)
         displayParams.height = tallHeight()
-        runCatching { wm?.addView(drawRoot, displayParams) }.onSuccess { display = drawRoot }
+        ServiceDiagnostics.update { copy(displayAttached = false, touchAttached = false, overlayError = null) }
+        runCatching { checkNotNull(wm).addView(drawRoot, displayParams) }
+            .onSuccess {
+                display = drawRoot
+                ServiceDiagnostics.update { copy(displayAttached = true) }
+            }
+            .onFailure { error ->
+                ServiceDiagnostics.update { copy(overlayError = "display: ${error.javaClass.simpleName}") }
+            }
 
         val touchRoot = TouchRoot(this, { display }, ::onOutsideTouch)
-        runCatching { wm?.addView(touchRoot, touchParams) }.onSuccess { touch = touchRoot }
+        runCatching { checkNotNull(wm).addView(touchRoot, touchParams) }
+            .onSuccess {
+                touch = touchRoot
+                ServiceDiagnostics.update { copy(touchAttached = true) }
+            }
+            .onFailure { error ->
+                ServiceDiagnostics.update { copy(overlayError = listOfNotNull(overlayError, "touch: ${error.javaClass.simpleName}").joinToString("; ")) }
+            }
         scheduleSettle()
     }
 
@@ -364,14 +408,11 @@ class IslandService : AccessibilityService() {
         list.isEmpty() || list.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
     }.getOrDefault(true)
 
-    private fun applySettings(s: IslandSettings, landscape: Boolean) {
+    private fun applySettings(s: IslandSettings, landscape: Boolean, screenOn: Boolean) {
         visible = s.enabled && !(s.hideInLandscape && landscape) && !IslandBus.offSchedule.value
         display?.visibility = if (visible) View.VISIBLE else View.GONE
-        // Остров спрятан — выключен, вне расписания или в повороте (скажем, смотрят видео): Compose в его окне
-        // не рисует и не просыпается ради анимаций и эквалайзера, пока остров снова не покажется. С погашенным
-        // экраном так не делаем: включили экран — остров сразу показывает то, что есть сейчас, а украшения
-        // и без того ждут экрана
-        owner.setActive(visible)
+        // Stop both frame work and visual delay loops. Domain monitors and alerts keep running.
+        owner.setActive(visible && screenOn)
         if (!visible) Controls.collapse()
         val y = dp(s.topOffset - ISLAND_PAD_DP)
         if (displayParams.y != y) {
@@ -533,6 +574,7 @@ class IslandService : AccessibilityService() {
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!IslandBus.serviceRunning.value) return
         when (event?.eventType) {
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> onWindowsChanged()
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> onWindowState(event)
@@ -623,39 +665,92 @@ class IslandService : AccessibilityService() {
 
     override fun onInterrupt() = Unit
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        disconnectSession()
+        return super.onUnbind(intent)
+    }
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         IslandBus.landscape.value = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
     }
 
     override fun onDestroy() {
-        // Остров выключили в спец. возможностях — держать его процесс больше незачем
-        stopService(Intent(this, KeepAliveService::class.java))
-        handler.removeCallbacks(shoot)
-        handler.removeCallbacks(showAgain)
-        handler.removeCallbacks(settle)
-        handler.removeCallbacks(fxSettle)
-        handler.removeCallbacks(touchUpdate)
-        IslandBus.egg.value = false
-        setTiltEnabled(false)
+        disconnectSession()
+        super.onDestroy()
+    }
+
+    private fun disconnectSession() {
         IslandBus.serviceRunning.value = false
+        runCatching { session.disconnect() }.onFailure { error ->
+            ServiceDiagnostics.update { copy(accessibilityError = "stop: ${error.javaClass.simpleName}") }
+        }
         IslandTile.refresh(this)
-        events?.stop()
-        torch?.stop()
-        alarm?.stop()
-        calls?.stop()
-        navReader?.stop()
-        clockReader?.stop()
-        payReader?.stop()
-        ClockControl.reader = null
-        alarmMonitor?.stop()
+    }
+
+    private fun stopSession() {
+        // Cancel collectors before any monitor publishes its final state.
         scope.cancel()
-        touch?.let { runCatching { wm?.removeView(it) } }
-        display?.let { runCatching { wm?.removeView(it) } }
+        handler.removeCallbacksAndMessages(null)
+        var failure: Throwable? = null
+        fun release(action: () -> Unit) {
+            runCatching(action).onFailure { error ->
+                if (failure == null) failure = error else failure?.addSuppressed(error)
+            }
+        }
+        // Attempt every cleanup even if a device-specific unregister/remove throws.
+        release { stopService(Intent(this, KeepAliveService::class.java)) }
+        release { setTiltEnabled(false) }
+        release { events?.stop() }
+        release { torch?.stop() }
+        release { alarm?.stop() }
+        release { calls?.stop() }
+        release { navReader?.close() }
+        release { clockReader?.stop() }
+        release { payReader?.stop() }
+        release { alarmMonitor?.stop() }
+        release { PayMonitor.clearReady() }
+        release { setScreenEvents(false) }
+        release { touch?.let { wm?.removeView(it) } }
+        release { display?.let { wm?.removeView(it) } }
+        release { owner.destroy() }
+        events = null
+        torch = null
+        alarm = null
+        calls = null
+        navReader = null
+        clockReader = null
+        payReader = null
+        alarmMonitor = null
+        ClockControl.reader = null
         touch = null
         display = null
-        owner.destroy()
-        super.onDestroy()
+        wm = null
+        body = Rect.Zero
+        bubble = Rect.Zero
+        tall = true
+        fxTall = false
+        touchSince = 0L
+        keyboardSeen = false
+        alerting = false
+        wakeBlocked = false
+        screenEvents = false
+        displayParams.flags = displayParams.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        @Suppress("DEPRECATION")
+        val alertFlags = WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        displayParams.flags = displayParams.flags and alertFlags.inv()
+        displayParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED
+        touchParams.x = -10
+        touchParams.y = -10
+        touchParams.width = 1
+        touchParams.height = 1
+        touchParams.flags = touchParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        IslandBus.egg.value = false
+        IslandBus.reply.value = null
+        IslandBus.foregroundPackage.value = null
+        Controls.collapse()
+        ServiceDiagnostics.update { copy(displayAttached = false, touchAttached = false) }
+        failure?.let { throw it }
     }
 }
 

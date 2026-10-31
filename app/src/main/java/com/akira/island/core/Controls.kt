@@ -1,10 +1,12 @@
 package com.akira.island.core
 
 import android.app.ActivityOptions
+import android.app.KeyguardManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.telecom.TelecomManager
 import kotlinx.coroutines.delay
@@ -12,6 +14,8 @@ import kotlinx.coroutines.launch
 import android.media.session.MediaController
 import android.media.session.PlaybackState
 import android.os.SystemClock
+import com.akira.island.data.SettingsRepo
+import com.akira.island.service.MessageLockscreen
 
 /** Команды, которые капсула отдаёт системе: плеер, таймер, фонарик, громкость. */
 object Controls {
@@ -129,8 +133,47 @@ object Controls {
         }.isSuccess
     }
 
+    /** Check at execution time, including callbacks retained by an outgoing animated card. */
+    private fun canUseMessage(context: Context, n: Notice, action: MsgAction? = null): Boolean {
+        val current = IslandBus.notice.value ?: return false
+        if (current.id != n.id || current.style != NoticeStyle.MESSAGE) return false
+        val m = current.message ?: return false
+        val keyguard = context.getSystemService(KeyguardManager::class.java)
+        val locked = IslandBus.messageLocked || keyguard?.isDeviceLocked == true ||
+            keyguard?.isKeyguardLocked == true ||
+            context.getSystemService(PowerManager::class.java)?.isInteractive == false
+        val s = SettingsRepo.current
+        val system = MessageLockscreen.read(context)
+        return if (action == null) NotificationPrivacy.allowsInteraction(m, s, locked, system)
+        else action in m.actions && NotificationPrivacy.allowsActions(m, s, locked, system)
+    }
+
+    fun canInteractWithMessage(context: Context, n: Notice): Boolean = canUseMessage(context, n)
+
+    fun openMessage(context: Context, n: Notice): Boolean {
+        if (!canUseMessage(context, n)) return false
+        val m = IslandBus.notice.value?.message ?: return false
+        if (!send(context, m.intent)) openApp(context, m.pkg)
+        if (IslandBus.notice.value?.id == n.id) IslandBus.notice.value = null
+        return true
+    }
+
+    fun beginMessageReply(context: Context, n: Notice, action: MsgAction): Boolean {
+        if (!action.isReply || !canUseMessage(context, n, action)) return false
+        IslandBus.reply.value = ReplyState(n.id, action)
+        return true
+    }
+
+    fun sendMessageAction(context: Context, n: Notice, action: MsgAction): Boolean {
+        if (action.isReply || !canUseMessage(context, n, action)) return false
+        return send(context, action.intent)
+    }
+
     /** Отправить ответ через кнопку «Ответить» из уведомления — так же, как это делает шторка. */
-    fun sendReply(context: Context, action: MsgAction, text: String): Boolean {
+    fun sendReply(context: Context, n: Notice, action: MsgAction, text: String): Boolean {
+        if (!canUseMessage(context, n, action) ||
+            IslandBus.reply.value?.let { it.noticeId == n.id && it.action === action } != true
+        ) return false
         val clean = text.trim()
         if (clean.isEmpty() || action.inputs.isEmpty()) return false
         return runCatching {

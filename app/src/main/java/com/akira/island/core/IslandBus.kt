@@ -4,11 +4,11 @@ import com.akira.island.data.SettingsRepo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -62,12 +62,18 @@ object IslandBus {
     val offSchedule = MutableStateFlow(false)
     /** Экран включён. Пока он погашен, датчик наклона и чтение экрана навигатора не работают — бережём батарею */
     val screenOn = MutableStateFlow(true)
+    /** Reschedule wall-clock deadlines after a clock/time-zone adjustment without periodic polling. */
+    val wallClockVersion = MutableStateFlow(0L)
     /** Включено энергосбережение Android — с «Экономией заряда» остров без живых эффектов */
     val powerSave = MutableStateFlow(false)
     /** Телефон заблокирован PIN-кодом, графическим ключом или паролем: тексты сообщений и кнопки скрыты */
     val locked = MutableStateFlow(false)
     /** На экране — экран блокировки (с PIN-кодом или без): в капсуле замок, если он включён в «Событиях» */
     val keyguard = MutableStateFlow(false)
+    val messageSystemPolicy = MutableStateFlow(MessageSystemPolicy(showOnLock = false, showPrivate = false))
+    /** Effective lock for regular messages, including a no-PIN lockscreen and a sleeping display. */
+    val messageLocked: Boolean
+        get() = NotificationPrivacy.isLocked(locked.value, keyguard.value, screenOn.value)
     /** Открыт экран «Размер и положение»: остров красный, чтобы подогнать его под камеру */
     val calibrating = MutableStateFlow(false)
     /** Играет та самая песня — остров празднует (пасхалка, Egg.kt) */
@@ -76,11 +82,14 @@ object IslandBus {
     @Volatile
     var lastTouch = 0L
 
-    private val queue = Channel<Notice>(capacity = 6, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private val queue = PendingNotices()
 
     init {
         scope.launch {
-            for (n in queue) {
+            while (true) {
+                val n = queue.receive()
+                // A source may have been blocked/disabled while this notice waited in the queue.
+                if (!NotificationPrivacy.allowsNotice(n, SettingsRepo.current, messageLocked, messageSystemPolicy.value)) continue
                 notice.value = n
                 val duration = SettingsRepo.current.noticeDurationMs + n.extraMs
                 // Уведомление уходит по времени или раньше, если его смахнули кликом
@@ -95,10 +104,42 @@ object IslandBus {
                 delay(110)
             }
         }
+        scope.launch {
+            val messageLock = combine(locked, keyguard, screenOn) { deviceLocked, showing, on ->
+                NotificationPrivacy.isLocked(deviceLocked, showing, on)
+            }
+            combine(SettingsRepo.state, messageLock, notice, messageSystemPolicy) { s, isLocked, n, system ->
+                Triple(s, isLocked, n) to system
+            }.collect { (snapshot, system) ->
+                val (s, isLocked, n) = snapshot
+                val m = n?.takeIf { it.style == NoticeStyle.MESSAGE }?.message
+                if (n != null && !NotificationPrivacy.allowsNotice(n, s, isLocked, system)) {
+                    if (notice.value?.id == n.id) notice.value = null
+                }
+                if (m == null || !NotificationPrivacy.allowsActions(m, s, isLocked, system)) {
+                    reply.value = null
+                }
+                if (m != null && !NotificationPrivacy.allowsInteraction(m, s, isLocked, system)) {
+                    noticeHold.value = false
+                }
+            }
+        }
     }
 
     fun post(n: Notice) {
-        queue.trySend(n)
+        if (!NotificationPrivacy.allowsNotice(n, SettingsRepo.current, messageLocked, messageSystemPolicy.value)) return
+        queue.post(n)
+    }
+
+    /** Withdraw the provider's queued/current message before forgetting its Android ranking. */
+    fun forgetMessage(key: String) {
+        queue.discardSource(key)
+        val current = notice.value
+        if (current?.style == NoticeStyle.MESSAGE && current.message?.key == key) {
+            reply.value = null
+            noticeHold.value = false
+            notice.value = null
+        }
     }
 }
 

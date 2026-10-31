@@ -69,6 +69,7 @@ import com.akira.island.core.AlarmInfo
 import com.akira.island.core.AppMessage
 import com.akira.island.core.Controls
 import com.akira.island.core.IslandBus
+import com.akira.island.core.IslandHealth
 import com.akira.island.core.MediaInfo
 import com.akira.island.core.MsgAction
 import com.akira.island.core.Notice
@@ -77,6 +78,7 @@ import com.akira.island.core.PayReady
 import com.akira.island.core.Tints
 import com.akira.island.core.tr
 import com.akira.island.data.SettingsRepo
+import com.akira.island.data.SetupStep
 import com.akira.island.island.Act
 import com.akira.island.island.CompactContent
 import com.akira.island.island.Ios
@@ -105,13 +107,24 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Какие разрешения есть. Проверяются заново каждый раз, когда возвращаемся из системных настроек. */
-private class PermState(val accessibility: Boolean, val notifications: Boolean, val calls: Boolean, val bluetooth: Boolean) {
+internal class PermState(
+    val accessibility: Boolean,
+    val notifications: Boolean,
+    val callGrants: Map<String, Boolean>,
+    val bluetooth: Boolean,
+    val exactAlarms: Boolean,
+    val batteryExempt: Boolean,
+    val telephony: Boolean,
+    val appNotifications: Boolean,
+) {
+    val calls: Boolean get() = callGrants.values.all { it }
+
     /** Чего не хватает — для подписи на главной */
     val missing: List<String>
         get() = listOfNotNull(
             tr("спец. возможности", "accessibility").takeIf { !accessibility },
             tr("уведомления", "notifications").takeIf { !notifications },
-            tr("звонки", "calls").takeIf { !calls },
+            tr("звонки", "calls").takeIf { telephony && !calls },
             "Bluetooth".takeIf { !bluetooth },
         )
 }
@@ -132,10 +145,15 @@ internal fun <T> rememberOnResume(read: () -> T): Pair<T, () -> Unit> {
 
 /** Разрешения и функция «проверить ещё раз» — после ответа на системный запрос. */
 @Composable
-private fun rememberPermState(): Pair<PermState, () -> Unit> {
+internal fun rememberPermState(): Pair<PermState, () -> Unit> {
     val context = LocalContext.current
     return rememberOnResume {
-        PermState(Perms.accessibility(context), Perms.notifications(context), Perms.calls(context), Perms.bluetooth(context))
+        PermState(
+            Perms.accessibility(context), Perms.notifications(context),
+            Perms.CALL_PERMISSIONS.associateWith { Perms.granted(context, it) },
+            Perms.bluetooth(context), Perms.exactAlarms(context), Perms.batteryUnrestricted(context), Perms.telephony(context),
+            Perms.appNotifications(context),
+        )
     }
 }
 
@@ -147,9 +165,10 @@ private fun rememberPermState(): Pair<PermState, () -> Unit> {
 fun HomeScreen(open: (Screen) -> Unit) {
     val context = LocalContext.current
     val s by SettingsRepo.state.collectAsState()
-    val running by IslandBus.serviceRunning.collectAsState()
     val (perms, _) = rememberPermState()
+    val health = rememberIslandHealth(perms.accessibility)
     val missing = perms.missing
+    val serviceIssue = health == IslandHealth.SERVICE_DISCONNECTED || health == IslandHealth.OVERLAY_FAILED
 
     Page(tr("Динамический остров", "Dynamic Island")) {
         IslandPreview()
@@ -174,19 +193,28 @@ fun HomeScreen(open: (Screen) -> Unit) {
         ToggleCard(
             Icons.Rounded.PowerSettingsNew,
             tr("Остров включён", "Island on"),
-            when {
-                !perms.accessibility -> tr("Сначала включите службу в спец. возможностях", "First turn on the service in Accessibility")
-                running -> tr("Капсула показывается над камерой", "The capsule shows over the camera")
-                else -> tr("Служба запускается…", "The service is starting…")
-            },
+            islandHealthText(health),
             s.enabled, color = Tile.Green,
         ) { v -> SettingsRepo.update { copy(enabled = v) } }
 
         Group {
             GroupItem(
-                Pos.First, Icons.Rounded.VerifiedUser, tr("Разрешения", "Permissions"),
-                if (missing.isEmpty()) tr("Всё включено", "All granted") else tr("Нужно включить: ", "Needed: ") + missing.joinToString(", "),
-                color = if (missing.isEmpty()) Tile.Green else Tile.Orange,
+                Pos.First, Icons.Rounded.Lightbulb, tr("Начальная настройка", "Setup guide", "Hướng dẫn thiết lập"),
+                tr("Язык, разрешения и приватность — по шагам", "Language, permissions and privacy, step by step", "Ngôn ngữ, quyền và riêng tư theo từng bước"),
+                color = Tile.Yellow,
+                onClick = {
+                    SettingsRepo.update { copy(setupCompleted = false, setupStep = SetupStep.WELCOME) }
+                    open(Screen.SETUP)
+                },
+            ) { Arrow() }
+            GroupItem(
+                Pos.Middle, Icons.Rounded.VerifiedUser, tr("Разрешения", "Permissions"),
+                when {
+                    serviceIssue -> tr("Проверьте состояние служб", "Check service diagnostics")
+                    missing.isEmpty() -> tr("Всё включено · диагностика служб", "All granted · service diagnostics")
+                    else -> tr("Нужно включить: ", "Needed: ") + missing.joinToString(", ")
+                },
+                color = if (missing.isEmpty() && !serviceIssue) Tile.Green else Tile.Orange,
                 onClick = { open(Screen.PERMISSIONS) },
             ) { if (missing.isEmpty()) Arrow() else CountBadge(missing.size) }
             // На виду: на Xiaomi, Oppo, Samsung остров иначе пропадает, и люди не знают почему
@@ -278,6 +306,8 @@ private fun DoubleBannerCard(app: String, onFix: () -> Unit, onHide: () -> Unit)
                     "останется только остров, а в шторке уведомление сохранится.",
                 "Both the island and $app itself show the message. Turn off its “Pop on screen” — only the island will " +
                     "remain, and the notification stays in the shade.",
+                "Cả đảo và ứng dụng $app đều hiển thị tin nhắn. Tắt “Hiển thị trên màn hình” của ứng dụng — " +
+                    "chỉ đảo còn hiển thị, còn thông báo vẫn nằm trong bảng thông báo.",
             ),
             color = Ui.Sub, fontSize = 14.sp, lineHeight = 20.sp,
         )
@@ -304,10 +334,16 @@ fun PermissionsScreen(onBack: () -> Unit, open: (Screen) -> Unit) {
     Page(tr("Разрешения", "Permissions"), onBack,
         subtitle = tr("Остров не хранит и не отправляет ваши уведомления, звонки и экраны: разрешения нужны, только чтобы показывать события",
             "The island doesn't store or send your notifications, calls or screens: permissions are only used to show events")) {
+        InfoText(tr(
+            "Для самого острова нужны спец. возможности. Доступ к уведомлениям — для музыки и сообщений, " +
+                "звонки и Bluetooth — для соответствующих функций. Эти разрешения не обязательны для остальных функций.",
+            "Accessibility is required for the island itself. Notification access enables music and messages; " +
+                "calls and Bluetooth enable their respective features. These permissions are not required for other features.",
+        ))
         Group {
             GroupItem(
                 Pos.First, Icons.Rounded.AccessibilityNew, tr("Спец. возможности", "Accessibility"),
-                if (perms.accessibility) tr("Включено — остров рисуется поверх строки состояния", "On — the island draws over the status bar")
+                if (perms.accessibility) tr("Доступ разрешён; состояние службы — ниже", "Access granted; see service status below")
                 else tr("Нужно включить: без этого острова не будет", "Needed: without it there's no island"),
                 onClick = { Perms.openAccessibility(context) }, color = Tile.Blue,
             ) { Status(perms.accessibility) }
@@ -319,11 +355,19 @@ fun PermissionsScreen(onBack: () -> Unit, open: (Screen) -> Unit) {
             ) { Status(perms.notifications) }
             GroupItem(
                 Pos.Middle, Icons.Rounded.Call, tr("Звонки", "Calls"),
-                if (perms.calls) tr("Входящий вызов, имя из контактов, ответ кнопкой", "Incoming calls, names from contacts, answer button")
-                else tr("Чтобы остров показывал входящие звонки", "So the island shows incoming calls"),
-                onClick = { if (perms.calls) Perms.openAppDetails(context) else callLauncher.launch(Perms.CALL_PERMISSIONS) },
+                when {
+                    !perms.telephony -> tr("На устройстве нет поддержки телефонных звонков", "Telephony is not available on this device")
+                    perms.calls -> tr("Входящий вызов, имя из контактов, ответ кнопкой", "Incoming calls, names from contacts, answer button")
+                    else -> tr("Не разрешено: ", "Not granted: ") + perms.callGrants.filterValues { !it }.keys.joinToString { callPermissionLabel(it) }
+                },
+                onClick = if (!perms.telephony) null else {
+                    { if (perms.calls) Perms.openAppDetails(context) else callLauncher.launch(Perms.CALL_PERMISSIONS) }
+                },
                 color = Tile.Green,
-            ) { Status(perms.calls) }
+            ) {
+                if (perms.telephony) Status(perms.calls)
+                else Text(tr("Н/Д", "N/A"), color = Ui.Sub, fontSize = 13.sp)
+            }
             GroupItem(
                 Pos.Last, Icons.Rounded.Bluetooth, "Bluetooth",
                 if (perms.bluetooth) tr("Имена наушников при подключении", "Headphone names when they connect")
@@ -335,6 +379,8 @@ fun PermissionsScreen(onBack: () -> Unit, open: (Screen) -> Unit) {
                 color = Tile.Indigo,
             ) { Status(perms.bluetooth) }
         }
+
+        PermissionDiagnostics(perms, refresh)
 
         SectionHeader(tr("Если не включается", "If it doesn't turn on"))
         Group {

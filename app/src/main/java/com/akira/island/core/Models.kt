@@ -241,6 +241,10 @@ data class AppMessage(
     val history: List<String> = emptyList(),
     /** На заблокированном экране вместо имени и текста — только название приложения, как в шторке */
     val sensitive: Boolean = false,
+    /** OS secret notification or lockscreen notifications disabled: suppress even if it arrived unlocked. */
+    val hideOnLock: Boolean = false,
+    /** Raw private visibility is needed when Android's private-content setting changes after ingestion. */
+    val privateOnLock: Boolean = false,
 )
 
 /**

@@ -52,12 +52,15 @@ class MediaMonitor(private val context: Context) {
     private var hiddenKey: String? = null
     private var lyricsKey: String? = null
     private var pendingHideKey: String? = null
+    private var active = false
 
     private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { list ->
-        bind(list.orEmpty())
+        if (active) bind(list.orEmpty())
     }
 
     fun start() {
+        if (active) return
+        active = true
         try {
             manager?.addOnActiveSessionsChangedListener(sessionsListener, component, handler)
             bind(manager?.getActiveSessions(component).orEmpty())
@@ -74,12 +77,16 @@ class MediaMonitor(private val context: Context) {
     }
 
     fun stop() {
+        active = false
         runCatching { manager?.removeOnActiveSessionsChangedListener(sessionsListener) }
         unbindAll()
+        handler.removeCallbacksAndMessages(null)
         scope.cancel()
+        current = null
         Controls.mediaController = null
         IslandBus.media.value = null
         IslandBus.lyrics.value = null
+        IslandBus.lyricsStatus.value = null
     }
 
     private fun bind(list: List<MediaController>) {
@@ -88,7 +95,15 @@ class MediaMonitor(private val context: Context) {
             val cb = object : MediaController.Callback() {
                 override fun onPlaybackStateChanged(state: PlaybackState?) = refresh()
                 override fun onMetadataChanged(metadata: MediaMetadata?) = refresh()
-                override fun onSessionDestroyed() = refresh()
+                override fun onSessionDestroyed() {
+                    if (!active) return
+                    // The system session-list callback can arrive later; don't keep the destroyed controller.
+                    bound.filter { it.first.sessionToken == c.sessionToken }.toList().forEach { entry ->
+                        runCatching { entry.first.unregisterCallback(entry.second) }
+                        bound.remove(entry)
+                    }
+                    refresh()
+                }
             }
             c.registerCallback(cb, handler)
             bound += c to cb
@@ -107,6 +122,7 @@ class MediaMonitor(private val context: Context) {
     }
 
     private fun refresh() {
+        if (!active) return
         val controllers = bound.map { it.first }
         val chosen = controllers.firstOrNull { isPlaying(it) }
             ?: current?.let { cur -> controllers.firstOrNull { it.sessionToken == cur.sessionToken } }

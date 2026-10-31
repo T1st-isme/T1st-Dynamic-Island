@@ -3,7 +3,6 @@
 package com.akira.island.island
 
 import android.content.Context
-import android.text.format.DateFormat
 import android.os.SystemClock
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -422,7 +421,7 @@ private fun TorchCard(t: TorchState, s: IslandSettings) {
     val wave = if (s.reduceEffects) null else breath.animateFloat(0f, 1f, infiniteRepeatable(tween(1050, easing = LinearEasing)), label = "w")
     val flare = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val label = if (max > 1 && t.on) tr("Фонарик · ${(share * 100).toInt()}%", "Flashlight · ${(share * 100).toInt()}%") else tr("Фонарик", "Flashlight")
+    val label = if (max > 1 && t.on) tr("Фонарик · ${(share * 100).toInt()}%", "Flashlight · ${(share * 100).toInt()}%", "Đèn pin · ${(share * 100).toInt()}%") else tr("Фонарик", "Flashlight")
 
     Box(
         Modifier
@@ -674,9 +673,9 @@ private fun ChargingExpanded(b: BatteryInfo) {
 private fun IdleExpanded(s: IslandSettings, battery: BatteryInfo) {
     val context = LocalContext.current
     val now = rememberWallNow(1000)
-    val time = DateFormat.getTimeFormat(context).format(Date(now))
+    val time = wakeTime(context, now)
     // «Пятница, 24 октября» или «Friday, October 24» — на языке острова
-    val date = SimpleDateFormat(if (Lang.en) "EEEE, MMMM d" else "EEEE, d MMMM", Lang.locale).format(Date(now))
+    val date = SimpleDateFormat(if (Lang.code == "en") "EEEE, MMMM d" else "EEEE, d MMMM", Lang.locale).format(Date(now))
         .replaceFirstChar { it.titlecase(Lang.locale) }
     val alarm by IslandBus.nextAlarm.collectAsState()
     Column {
@@ -693,7 +692,8 @@ private fun IdleExpanded(s: IslandSettings, battery: BatteryInfo) {
                         Icon(Ios.alarm, null, tint = AlarmTint, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(5.dp))
                         Text(tr("${wakeTime(context, a.triggerAt)} · через ${durationWords(a.triggerAt - now)}",
-                            "${wakeTime(context, a.triggerAt)} · in ${durationWords(a.triggerAt - now)}"),
+                            "${wakeTime(context, a.triggerAt)} · in ${durationWords(a.triggerAt - now)}",
+                            "${wakeTime(context, a.triggerAt)} · sau ${durationWords(a.triggerAt - now)}"),
                             color = AlarmTint, fontSize = 13.sp, maxLines = 1)
                     }
                 }
@@ -727,7 +727,7 @@ private fun IdleExpanded(s: IslandSettings, battery: BatteryInfo) {
                     SettingsRepo.update { copy(timerMinutes = (timerMinutes - 1).coerceAtLeast(1)) }
                 }
                 Text(
-                    tr("${s.timerMinutes} мин", "${s.timerMinutes} min"), color = Color.White, fontSize = 16.sp, style = Digits,
+                    tr("${s.timerMinutes} мин", "${s.timerMinutes} min", "${s.timerMinutes} phút"), color = Color.White, fontSize = 16.sp, style = Digits,
                     textAlign = TextAlign.Center, modifier = Modifier.weight(1f),
                 )
                 RoundButton(Ios.add, size = 38.dp, iconScale = 0.44f) {

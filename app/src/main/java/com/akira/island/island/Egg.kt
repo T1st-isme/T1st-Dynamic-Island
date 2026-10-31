@@ -208,7 +208,7 @@ private fun DrawScope.cornerOf(b: Rect) = min(b.height / 2f, 44.dp.toPx())
 fun EggDriver(body: () -> Rect, s: IslandSettings) {
     val density = LocalDensity.current.density
     val settings by rememberUpdatedState(s)
-    LaunchedEffect(Unit) {
+    RenderingEffect(Unit) {
         var lastBeat = Long.MIN_VALUE
         var last = 0L
         try {

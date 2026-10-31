@@ -75,10 +75,11 @@ fun UpdateSection() {
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(tr("Доступна версия ${release.version}", "Version ${release.version} is available"),
+                Text(tr("Доступна версия ${release.version}", "Version ${release.version} is available", "Đã có phiên bản ${release.version}"),
                     color = Ui.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                val size = if (release.sizeBytes > 0) tr(" · %.1f МБ", " · %.1f MB").format(release.sizeBytes / 1_048_576.0) else ""
-                Text(tr("Сейчас установлена ${UpdateChecker.currentVersion(context)}$size", "Installed: ${UpdateChecker.currentVersion(context)}$size"),
+                val size = if (release.sizeBytes > 0) Lang.format(tr(" · %.1f МБ", " · %.1f MB"), release.sizeBytes / 1_048_576.0) else ""
+                Text(tr("Сейчас установлена ${UpdateChecker.currentVersion(context)}$size", "Installed: ${UpdateChecker.currentVersion(context)}$size",
+                    "Đã cài: ${UpdateChecker.currentVersion(context)}$size"),
                     color = Ui.Sub, fontSize = 14.sp)
             }
         }
@@ -108,7 +109,7 @@ fun UpdateSection() {
                     color = Ui.Primary,
                     trackColor = Ui.IconBg,
                 )
-                Text(tr("Скачиваю… ${(d.progress * 100).toInt()}%", "Downloading… ${(d.progress * 100).toInt()}%"),
+                Text(tr("Скачиваю… ${(d.progress * 100).toInt()}%", "Downloading… ${(d.progress * 100).toInt()}%", "Đang tải xuống… ${(d.progress * 100).toInt()}%"),
                     color = Ui.Sub, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
             }
             ready != null -> {
@@ -149,10 +150,10 @@ private fun FilledPill(text: String, onClick: () -> Unit) {
 /** Что показать про проверку обновлений: подпись под «Проверить сейчас». */
 fun updateStatusText(state: UpdateState, current: String): String = when (state) {
     UpdateState.Checking -> tr("Проверяю…", "Checking…")
-    UpdateState.UpToDate -> tr("У вас последняя версия $current", "You have the latest version $current")
-    is UpdateState.Available -> tr("Доступна версия ${state.release.version}", "Version ${state.release.version} is available")
+    UpdateState.UpToDate -> tr("У вас последняя версия $current", "You have the latest version $current", "Bạn đang dùng phiên bản mới nhất $current")
+    is UpdateState.Available -> tr("Доступна версия ${state.release.version}", "Version ${state.release.version} is available", "Đã có phiên bản ${state.release.version}")
     is UpdateState.Error -> state.message
-    UpdateState.Idle -> tr("Сейчас установлена версия $current", "Installed version: $current")
+    UpdateState.Idle -> tr("Сейчас установлена версия $current", "Installed version: $current", "Phiên bản đã cài: $current")
 }
 
 /**
@@ -194,7 +195,7 @@ fun NotesDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         containerColor = Ui.Card,
         titleContentColor = Ui.Text,
-        title = { Text(tr("Что нового в $current", "What's new in $current")) },
+        title = { Text(tr("Что нового в $current", "What's new in $current", "Có gì mới trong $current")) },
         text = {
             if (notes != null) {
                 ReleaseNotes(notes, Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()))

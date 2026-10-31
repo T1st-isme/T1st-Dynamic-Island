@@ -78,7 +78,15 @@ const val ALARM_LEAD_MS = 12 * 3_600_000L
 fun isWakeUp(triggerAt: Long): Boolean =
     Calendar.getInstance().apply { timeInMillis = triggerAt }.get(Calendar.HOUR_OF_DAY) in 3..11
 
-fun wakeTime(context: Context, triggerAt: Long): String = DateFormat.getTimeFormat(context).format(Date(triggerAt))
+fun wakeTime(context: Context, triggerAt: Long): String {
+    // Preserve the user's 12/24-hour preference, but use Vietnamese day periods
+    // when Vietnamese is selected independently of the phone's language.
+    val formatter = if (Lang.code == "vi") SimpleDateFormat(
+        DateFormat.getBestDateTimePattern(Lang.locale, if (DateFormat.is24HourFormat(context)) "Hm" else "hm"),
+        Lang.locale,
+    ) else DateFormat.getTimeFormat(context)
+    return formatter.format(Date(triggerAt))
+}
 
 /**
  * Цифры крупно, а «AM»/«PM» вдвое мельче, как на iPhone: в 12-часовом формате «11:45 PM» не распирает
@@ -104,9 +112,9 @@ fun durationWords(ms: Long): String {
     val h = minutes / 60
     val m = minutes % 60
     return when {
-        h == 0L -> tr("$m мин", "$m min")
-        m == 0L -> tr("$h ч", "$h h")
-        else -> tr("$h ч $m мин", "$h h $m min")
+        h == 0L -> tr("$m мин", "$m min", "$m phút")
+        m == 0L -> tr("$h ч", "$h h", "$h giờ")
+        else -> tr("$h ч $m мин", "$h h $m min", "$h giờ $m phút")
     }
 }
 
@@ -277,8 +285,8 @@ fun AlarmExpanded(a: AlarmInfo, s: IslandSettings) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (wake) Ios.moon else Ios.alarm, null, tint = if (wake) NightTint else AlarmTint, modifier = Modifier.size(15.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(if (wake) tr("Сон — ${durationWords(left)}", "Sleep — ${durationWords(left)}")
-                    else tr("Через ${durationWords(left)}", "In ${durationWords(left)}"),
+                Text(if (wake) tr("Сон — ${durationWords(left)}", "Sleep — ${durationWords(left)}", "Ngủ — ${durationWords(left)}")
+                    else tr("Через ${durationWords(left)}", "In ${durationWords(left)}", "Sau ${durationWords(left)}"),
                     color = AlarmTint, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }

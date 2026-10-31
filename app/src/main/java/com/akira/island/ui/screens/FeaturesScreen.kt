@@ -53,11 +53,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.akira.island.core.Lang
 import com.akira.island.core.Tints
 import com.akira.island.core.tr
 import com.akira.island.data.AccentMode
 import com.akira.island.data.AppLanguage
+import com.akira.island.data.NotificationContent
 import com.akira.island.data.IslandSettings
 import com.akira.island.data.SettingsRepo
 import com.akira.island.island.FitText
@@ -126,7 +126,7 @@ fun FeaturesScreen(open: (Screen) -> Unit) {
         SectionHeader(tr("Общие", "General"))
         Group {
             // Значок глобуса и «Language» рядом — язык найдётся, даже если сейчас он непонятен
-            GroupItem(Pos.First, Icons.Rounded.Language, if (Lang.en) "Language" else "Язык · Language", s.language.title,
+            GroupItem(Pos.First, Icons.Rounded.Language, tr("Язык · Language", "Language", "Ngôn ngữ"), s.language.title,
                 color = Tile.Blue, onClick = { languageDialog = true }) { Arrow() }
             GroupItem(Pos.Last, Icons.Rounded.Restore, tr("Сбросить все настройки", "Reset all settings"),
                 tr("Вернуть всё как было после установки", "Back to how it was after installing"),
@@ -135,7 +135,7 @@ fun FeaturesScreen(open: (Screen) -> Unit) {
     }
 
     if (languageDialog) {
-        ChoiceDialog(if (Lang.en) "Language" else "Язык · Language", AppLanguage.entries, s.language, { it.title },
+        ChoiceDialog(tr("Язык · Language", "Language", "Ngôn ngữ"), AppLanguage.entries, s.language, { it.title },
             { v -> SettingsRepo.update { copy(language = v) } }) { languageDialog = false }
     }
 
@@ -184,7 +184,8 @@ fun BehaviorScreen(onBack: () -> Unit) {
         Group {
             GroupToggle(if (s.scheduleOn) Pos.First else Pos.Single, Icons.Rounded.Schedule, tr("По расписанию", "On a schedule"),
                 tr("Остров виден только с ${hourLabel(s.scheduleFrom)} до ${hourLabel(s.scheduleTo)}",
-                    "The island shows only from ${hourLabel(s.scheduleFrom)} to ${hourLabel(s.scheduleTo)}"),
+                    "The island shows only from ${hourLabel(s.scheduleFrom)} to ${hourLabel(s.scheduleTo)}",
+                    "Đảo chỉ hiển thị từ ${hourLabel(s.scheduleFrom)} đến ${hourLabel(s.scheduleTo)}"),
                 s.scheduleOn, color = Tile.Indigo) { v -> SettingsRepo.update { copy(scheduleOn = v) } }
             if (s.scheduleOn) {
                 GroupSlider(Pos.Middle, Icons.Rounded.WbSunny, tr("С", "From"), s.scheduleFrom.toFloat(), 0f..23f,
@@ -247,7 +248,7 @@ private fun hourLabel(h: Int) = "%d:00".format(h)
 
 /** Подпись для «Сворачивать раскрытый остров». */
 private fun collapseLabel(sec: Int) = if (sec <= 0) tr("Только касанием мимо или свайпом вверх", "Only by tapping outside or swiping up")
-    else tr("Через $sec секунд без касаний", "After $sec seconds without a touch")
+    else tr("Через $sec секунд без касаний", "After $sec seconds without a touch", "Sau $sec giây không chạm")
 
 private val accentColors = listOf(
     0xFF0A84FF, 0xFFC6C3F7, 0xFF64D2FF, 0xFF34C759, 0xFFFFD60A, 0xFFFF9F0A,
@@ -256,18 +257,46 @@ private val accentColors = listOf(
 
 /** «Уведомления»: сообщения приложений в острове — что показывать, сколько текста и каким цветом кнопки. */
 @Composable
-fun NotificationsScreen(onBack: () -> Unit) {
+fun NotificationsScreen(onBack: () -> Unit, open: (Screen) -> Unit) {
     val s by SettingsRepo.state.collectAsState()
     var accentDialog by remember { mutableStateOf(false) }
+    var contentDialog by remember { mutableStateOf(false) }
 
     Page(tr("Уведомления", "Notifications"), onBack) {
+        SectionHeader(tr("Приватность", "Privacy", "Quyền riêng tư"))
+        Group {
+            GroupItem(Pos.First, Icons.Rounded.NotificationsOff,
+                tr("Содержимое уведомлений", "Notification content", "Nội dung thông báo"),
+                s.notificationContent.title, onClick = { contentDialog = true }, color = Tile.Blue) { Arrow() }
+            GroupToggle(Pos.Middle, Icons.Rounded.Lock,
+                tr("Скрывать содержимое при блокировке", "Hide content while locked", "Ẩn nội dung khi khóa máy"),
+                tr("Системные ограничения действуют даже при выключении этой настройки",
+                    "Android restrictions still apply when this option is off",
+                    "Giới hạn của Android vẫn có hiệu lực khi tắt tùy chọn này"),
+                s.hideNotificationContentOnLock, color = Tile.Purple) { value ->
+                SettingsRepo.update { copy(hideNotificationContentOnLock = value) }
+            }
+            GroupItem(Pos.Last, Icons.Rounded.Apps,
+                tr("Приложения для сообщений", "Message apps", "Ứng dụng gửi tin nhắn"),
+                tr("Выберите, какие приложения показывают обычные сообщения",
+                    "Choose which apps can show regular message banners",
+                    "Chọn ứng dụng được hiện thẻ tin nhắn thông thường"),
+                onClick = { open(Screen.NOTIFICATION_APPS) }, color = Tile.Green) { Arrow() }
+        }
+        InfoText(tr(
+            "Эти параметры касаются обычных сообщений, но не музыки, звонков, навигации или оплаты. На заблокированном телефоне кнопки и ответы отключены.",
+            "These options apply to regular messages, not music, calls, navigation or payments. Buttons and replies are disabled while locked.",
+            "Các tùy chọn này áp dụng cho tin nhắn thông thường, không áp dụng cho nhạc, cuộc gọi, chỉ đường hoặc thanh toán. Nút thao tác và trả lời bị tắt khi máy khóa.",
+        ))
+        SectionHeader(tr("Отображение", "Display", "Hiển thị"))
         Group {
             GroupToggle(Pos.First, Icons.Rounded.ChatBubble, tr("Уведомления приложений", "App notifications"),
                 tr("Сообщения из Telegram, WhatsApp, почты и других приложений — карточкой в острове, как на iPhone",
                     "Messages from Telegram, WhatsApp, email and other apps as a card in the island, like on iPhone"),
                 s.cardMessages, color = Tile.Blue) { v -> SettingsRepo.update { copy(cardMessages = v) } }
             GroupToggle(Pos.Middle, Icons.AutoMirrored.Rounded.Reply, tr("Кнопки в уведомлениях", "Notification buttons"),
-                tr("«Ответить» с вводом текста прямо в острове и «Пометить прочитанным»", "Reply with typing right in the island, and Mark as read"),
+                tr("Только при полном содержимом и разблокированном телефоне", "Only with full content and an unlocked phone",
+                    "Chỉ khi hiện đầy đủ nội dung và máy đã mở khóa"),
                 s.msgActions, color = Tile.Indigo) { v -> SettingsRepo.update { copy(msgActions = v) } }
             GroupToggle(Pos.Middle, Icons.Rounded.Smartphone, tr("Из открытого приложения", "From the open app"),
                 tr("Показывать и уведомления приложения, которое сейчас на экране", "Also show notifications from the app that's on screen"),
@@ -292,6 +321,11 @@ fun NotificationsScreen(onBack: () -> Unit) {
     if (accentDialog) {
         ChoiceDialog(tr("Цвет кнопок", "Button color"), AccentMode.entries, s.accentMode, { "${it.title} — ${it.hint}" },
             { v -> SettingsRepo.update { copy(accentMode = v) } }) { accentDialog = false }
+    }
+    if (contentDialog) {
+        ChoiceDialog(tr("Содержимое уведомлений", "Notification content", "Nội dung thông báo"),
+            NotificationContent.entries, s.notificationContent, { it.title },
+            { value -> SettingsRepo.update { copy(notificationContent = value) } }) { contentDialog = false }
     }
 }
 

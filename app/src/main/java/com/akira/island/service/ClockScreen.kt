@@ -440,6 +440,7 @@ class ClockScreenReader(private val service: AccessibilityService, private val s
     fun stop() {
         stopReading()
         endJob?.cancel()
+        cleanupJob?.cancel()
         timer = null
         stopwatch = null
         IslandBus.chrono.value = IslandBus.chrono.value - TIMER_KEY - STOPWATCH_KEY
@@ -656,14 +657,14 @@ class ClockScreenReader(private val service: AccessibilityService, private val s
         val w = stopwatch?.takeUnless { fromNotification }
         if (t != null) {
             val old = map[TIMER_KEY]
-            map[TIMER_KEY] = ChronoInfo(TIMER_KEY, pkg, tr("Таймер · $label", "Timer · $label"), icon, t.base, true,
+            map[TIMER_KEY] = ChronoInfo(TIMER_KEY, pkg, tr("Таймер · $label", "Timer · $label", "Hẹn giờ · $label"), icon, t.base, true,
                 old?.postTime ?: System.currentTimeMillis(), pausedMs = t.pausedMs)
         } else {
             map.remove(TIMER_KEY)
         }
         if (w != null) {
             val old = map[STOPWATCH_KEY]
-            map[STOPWATCH_KEY] = ChronoInfo(STOPWATCH_KEY, pkg, tr("Секундомер · $label", "Stopwatch · $label"), icon, w.base, false,
+            map[STOPWATCH_KEY] = ChronoInfo(STOPWATCH_KEY, pkg, tr("Секундомер · $label", "Stopwatch · $label", "Bấm giờ · $label"), icon, w.base, false,
                 old?.postTime ?: System.currentTimeMillis(), pausedMs = w.pausedMs)
         } else {
             map.remove(STOPWATCH_KEY)
@@ -760,19 +761,24 @@ object ClockControl {
 
     /** Уведомления «Часов» на паузе, которые остров уже убрал: ключ → застывшее время */
     private val dismissed = HashMap<String, Long>()
+    private val pauseTimeouts = PausedClockTimeouts(IslandBus.scope, { ClockScreenReader.INACTIVE_MS }) { key, pausedMs ->
+        if (IslandBus.chrono.value[key]?.pausedMs == pausedMs) {
+            dismissed[key] = pausedMs
+            IslandBus.chrono.value = IslandBus.chrono.value - key
+        }
+    }
 
     /**
      * Таймер или секундомер из уведомления встал на паузу — через несколько секунд плашка убирается:
      * неактивный таймер в острове не висит. То же уведомление на той же паузе обратно не показывается.
      */
     fun dropPausedLater(key: String) {
-        IslandBus.scope.launch {
-            delay(ClockScreenReader.INACTIVE_MS)
-            val c = IslandBus.chrono.value[key] ?: return@launch
-            val paused = c.pausedMs ?: return@launch
-            dismissed[key] = paused
-            IslandBus.chrono.value = IslandBus.chrono.value - key
-        }
+        val pausedMs = IslandBus.chrono.value[key]?.pausedMs ?: return
+        pauseTimeouts.schedule(key, pausedMs)
+    }
+
+    fun cancelPausedJob(key: String) {
+        pauseTimeouts.cancel(key)
     }
 
     /** Это уведомление на этой паузе остров уже убирал. */
@@ -785,6 +791,7 @@ object ClockControl {
     }
 
     fun forget(key: String) {
+        cancelPausedJob(key)
         dismissed.remove(key)
     }
 }

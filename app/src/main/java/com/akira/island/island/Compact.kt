@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -95,13 +96,14 @@ import com.akira.island.core.IslandBus
 import com.akira.island.core.LiveInfo
 import com.akira.island.core.LiveKind
 import com.akira.island.core.MsgAction
-import com.akira.island.core.ReplyState
 import com.akira.island.core.MediaInfo
 import com.akira.island.core.Notice
 import com.akira.island.core.NoticeStyle
+import com.akira.island.core.NotificationPrivacy
 import com.akira.island.core.Tints
 import com.akira.island.core.formatDuration
 import com.akira.island.data.IslandSettings
+import com.akira.island.data.NotificationContent
 import com.akira.island.data.SettingsRepo
 import com.akira.island.service.Messages
 import androidx.compose.runtime.collectAsState
@@ -448,21 +450,57 @@ private fun PillNotice(n: Notice, s: IslandSettings) {
  */
 @Composable
 private fun MessageCard(n: Notice, m: AppMessage, s: IslandSettings, @Suppress("UNUSED_PARAMETER") wideWidth: Dp) {
+    // Observe live policy even when an animated transition retains an old Notice/settings snapshot.
+    val current by SettingsRepo.state.collectAsState()
+    val deviceLocked by IslandBus.locked.collectAsState()
+    val keyguard by IslandBus.keyguard.collectAsState()
+    val screenOn by IslandBus.screenOn.collectAsState()
+    val systemPolicy by IslandBus.messageSystemPolicy.collectAsState()
+    val currentNotice by IslandBus.notice.collectAsState()
+    val locked = NotificationPrivacy.isLocked(deviceLocked, keyguard, screenOn)
+    // Outgoing animation snapshots must not reappear after their provider/ranking has gone.
+    if (currentNotice?.id != n.id || IslandBus.notice.value?.id != n.id) return
+    if (!NotificationPrivacy.allowsMessage(m, current, locked, systemPolicy)) return
+    val mode = NotificationPrivacy.content(m, current, locked, systemPolicy)
+    val actionsAllowed = NotificationPrivacy.allowsActions(m, current, locked, systemPolicy)
+    // Recreate local expansion/draft state on privacy changes; do not wait for a LaunchedEffect to redact.
+    key(n.id, mode, locked, actionsAllowed) {
+        MessageCardContent(n, m, s, mode, locked, actionsAllowed)
+    }
+}
+
+@Composable
+private fun MessageCardContent(
+    n: Notice,
+    m: AppMessage,
+    s: IslandSettings,
+    mode: NotificationContent,
+    locked: Boolean,
+    actionsAllowed: Boolean,
+) {
+    if (mode == NotificationContent.ICON_ONLY) {
+        val h = activeHeight(s)
+        CompactRow(h, compactGap(s), sideMax(s),
+            left = { AppIcon(m.appIcon, h * 0.56f, Ios.bell, Tints.Gray) },
+            right = {
+                Icon(Ios.bell, tr("Уведомление", "Notification", "Thông báo"), tint = Tints.Gray, modifier = Modifier.size(h * 0.4f))
+            },
+        )
+        return
+    }
     val context = LocalContext.current
     val haptic = rememberHaptic()
     val iconSize = 40.dp
     val reply by IslandBus.reply.collectAsState()
-    val locked by IslandBus.locked.collectAsState()
-    // На заблокированном телефоне — как в шторке: без кнопок, а скрытые уведомления без имени и текста
-    val hidden = locked && m.sensitive
-    val replyAction = reply?.takeIf { it.noticeId == n.id && !locked }?.action
-    val accent = rememberAccent(s, m.accent)
+    val hidden = mode != NotificationContent.FULL
+    val replyAction = reply?.takeIf { it.noticeId == n.id && actionsAllowed }?.action
+    val accent = rememberAccent(s, if (hidden) null else m.accent)
     var open by remember(n.id) { mutableStateOf(false) }
     val dim = Color.White.copy(alpha = 0.55f)
 
     // Пока отвечают или листают переписку, плашка не уходит по таймеру
-    DisposableEffect(open, replyAction != null) {
-        IslandBus.noticeHold.value = open || replyAction != null
+    DisposableEffect(open, replyAction != null, locked, hidden) {
+        IslandBus.noticeHold.value = !locked && !hidden && (open || replyAction != null)
         onDispose { IslandBus.noticeHold.value = false }
     }
     // Плашка ушла — ввод закрывается, окну возвращается «неактивный» режим
@@ -490,7 +528,7 @@ private fun MessageCard(n: Notice, m: AppMessage, s: IslandSettings, @Suppress("
             }
             Spacer(Modifier.width(compactGap(s)))
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                Text(tr("сейчас", "now"), color = dim, fontSize = 12.sp, maxLines = 1, softWrap = false)
+                if (!hidden) Text(tr("сейчас", "now", "bây giờ"), color = dim, fontSize = 12.sp, maxLines = 1, softWrap = false)
                 Spacer(Modifier.width(4.dp))
                 Icon(Ios.bell, null, tint = dim, modifier = Modifier.size(12.dp))
             }
@@ -505,16 +543,17 @@ private fun MessageCard(n: Notice, m: AppMessage, s: IslandSettings, @Suppress("
                         if (hidden) m.appName else n.title, color = Color.White, fontSize = 15.sp, lineHeight = 20.sp,
                         fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
                     )
-                    if (m.history.size > 1 && !hidden) {
+                    if (m.history.size > 1 && !hidden && !locked) {
                         Spacer(Modifier.width(8.dp))
                         CountPill(m.history.size, open, accent) {
+                            if (!Controls.canInteractWithMessage(context, n)) return@CountPill
                             haptic()
                             open = !open
                         }
                     }
                 }
                 if (hidden) {
-                    Text(tr("Содержимое скрыто", "Content hidden"), color = dim, fontSize = 14.sp, lineHeight = 19.sp, maxLines = 1)
+                    Text(tr("Содержимое скрыто", "Content hidden", "Nội dung đã ẩn"), color = dim, fontSize = 14.sp, lineHeight = 19.sp, maxLines = 1)
                 } else if (open && m.history.size > 1) {
                     m.history.forEachIndexed { i, line ->
                         Text(
@@ -536,15 +575,15 @@ private fun MessageCard(n: Notice, m: AppMessage, s: IslandSettings, @Suppress("
             Box(Modifier.padding(start = 16.dp + iconSize + 12.dp, end = 16.dp)) {
                 ReplyField(replyAction, accent) { text ->
                     if (text.isBlank()) return@ReplyField
-                    if (Controls.sendReply(context, replyAction, text)) {
+                    if (!Controls.canInteractWithMessage(context, n)) return@ReplyField
+                    if (Controls.sendReply(context, n, replyAction, text)) {
                         Messages.onReplied(m.key)
                         IslandBus.reply.value = null
                         IslandBus.notice.value = null
-                        // Как в ролике: на миг «Отправлено» с галочкой и кому
+                        // Generic acknowledgement: a later lock/privacy change must not expose the recipient.
                         IslandBus.post(
                             Notice(
-                                title = tr("Отправлено", "Sent"),
-                                state = n.title,
+                                title = tr("Отправлено", "Sent", "Đã gửi"),
                                 icon = n.icon,
                                 tint = accent,
                                 style = NoticeStyle.SENT,
@@ -553,11 +592,11 @@ private fun MessageCard(n: Notice, m: AppMessage, s: IslandSettings, @Suppress("
                         )
                     } else {
                         // Поле остаётся открытым с текстом — можно попробовать ещё раз или ответить в приложении
-                        Toast.makeText(context, tr("Не удалось отправить ответ", "Couldn't send the reply"), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, tr("Не удалось отправить ответ", "Couldn't send the reply", "Không thể gửi trả lời"), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
-        } else if (m.actions.isNotEmpty() && !locked) {
+        } else if (m.actions.isNotEmpty() && actionsAllowed) {
             // Кнопки стоят под текстом, на одной линии с ним, как в шторке
             Row(
                 Modifier.fillMaxWidth().padding(start = 16.dp + iconSize + 12.dp, end = 16.dp, top = 4.dp),
@@ -568,10 +607,9 @@ private fun MessageCard(n: Notice, m: AppMessage, s: IslandSettings, @Suppress("
                     // Последняя кнопка уступает место, если подпись длинная
                     TextAction(a.title, accent, if (i == m.actions.lastIndex) Modifier.weight(1f, fill = false) else Modifier, size = 14.sp) {
                         if (a.isReply) {
-                            IslandBus.reply.value = ReplyState(n.id, a)
+                            Controls.beginMessageReply(context, n, a)
                         } else {
-                            Controls.send(context, a.intent)
-                            IslandBus.notice.value = null
+                            if (Controls.sendMessageAction(context, n, a)) IslandBus.notice.value = null
                         }
                     }
                 }
@@ -674,6 +712,9 @@ private fun ReplyField(action: MsgAction, accent: Color, onSend: (String) -> Uni
     var text by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    DisposableEffect(Unit) {
+        onDispose { keyboard?.hide() }
+    }
     LaunchedEffect(Unit) {
         // Окно получает фокус не сразу, поэтому просим клавиатуру несколько раз
         repeat(3) {
@@ -705,7 +746,7 @@ private fun ReplyField(action: MsgAction, accent: Color, onSend: (String) -> Uni
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (text.isEmpty()) {
-                            Text("${action.title.ifBlank { "Ответ" }}…", color = Tints.Gray, fontSize = 15.sp, maxLines = 1)
+                            Text("${action.title.ifBlank { tr("Ответ", "Reply", "Trả lời") }}…", color = Tints.Gray, fontSize = 15.sp, maxLines = 1)
                         }
                         inner()
                     }
@@ -851,7 +892,7 @@ private fun LiveBanner(n: Notice, l: LiveInfo, s: IslandSettings, wideWidth: Dp)
                     overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
             }
             // На узкой плашке — коротко: «12:31 · 19 ч»; полностью — в раскрытом виде
-            val shortEta = l.eta?.removePrefix("Прибытие в ")?.removePrefix("Arrive ")?.split(" · ")?.take(2)?.joinToString(" · ")
+            val shortEta = l.eta?.removePrefix("Прибытие в ")?.removePrefix("Arrive ")?.removePrefix("Đến lúc ")?.split(" · ")?.take(2)?.joinToString(" · ")
             if (shortEta != null) {
                 Text(shortEta, color = tint, fontSize = 13.sp, style = Digits, maxLines = 1)
             }

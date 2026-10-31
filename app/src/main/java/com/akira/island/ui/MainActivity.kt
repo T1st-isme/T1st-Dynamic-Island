@@ -84,16 +84,18 @@ import com.akira.island.ui.screens.KeepAliveScreen
 import com.akira.island.ui.screens.LookScreen
 import com.akira.island.ui.screens.LyricsScreen
 import com.akira.island.ui.screens.NotificationsScreen
+import com.akira.island.ui.screens.NotificationAppsScreen
 import com.akira.island.ui.screens.PayDiagScreen
 import com.akira.island.ui.screens.PermissionsScreen
 import com.akira.island.ui.screens.SizeScreen
+import com.akira.island.ui.screens.SetupScreen
 import com.akira.island.ui.screens.TestsScreen
 import com.akira.island.service.KeepAliveService
 import com.akira.island.update.UpdateChecker
 
 enum class Screen {
     CARDS, EVENTS, GESTURES, LYRICS, SIZE, COLORS, INSTRUCTION, ABOUT, DIAG, LOOK, ANIM, EFFECTS, BANNERS,
-    PERMISSIONS, TESTS, NOTIFICATIONS, BEHAVIOR, PAYDIAG, KEEPALIVE, BANKS,
+    PERMISSIONS, TESTS, NOTIFICATIONS, BEHAVIOR, PAYDIAG, KEEPALIVE, BANKS, SETUP, NOTIFICATION_APPS,
 }
 
 class MainActivity : ComponentActivity() {
@@ -117,15 +119,27 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot() {
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    var stack by remember { mutableStateOf(listOf<Screen>()) }
+    var stack by remember {
+        mutableStateOf(if (SettingsRepo.current.setupCompleted) emptyList<Screen>() else listOf(Screen.SETUP))
+    }
     var forward by remember { mutableStateOf(true) }
     val open: (Screen) -> Unit = {
         forward = true
         stack = stack + it
     }
-    val back: () -> Unit = {
+    val pop: () -> Unit = {
         forward = false
         stack = stack.dropLast(1)
+    }
+    val back: () -> Unit = {
+        if (stack.lastOrNull() == Screen.SETUP) {
+            val previous = SettingsRepo.current.setupStep.previous
+            if (previous != null) SettingsRepo.update { copy(setupStep = previous) }
+            else {
+                SettingsRepo.update { copy(setupCompleted = true) }
+                pop()
+            }
+        } else pop()
     }
     BackHandler(enabled = stack.isNotEmpty(), onBack = back)
 
@@ -174,7 +188,9 @@ private fun AppRoot() {
                     Screen.BANNERS.name -> BannersScreen(back)
                     Screen.PERMISSIONS.name -> PermissionsScreen(back, open)
                     Screen.TESTS.name -> TestsScreen(back)
-                    Screen.NOTIFICATIONS.name -> NotificationsScreen(back)
+                    Screen.NOTIFICATIONS.name -> NotificationsScreen(back, open)
+                    Screen.NOTIFICATION_APPS.name -> NotificationAppsScreen(back)
+                    Screen.SETUP.name -> SetupScreen(pop, back, open)
                     Screen.BEHAVIOR.name -> BehaviorScreen(back)
                 }
             }
